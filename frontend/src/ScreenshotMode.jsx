@@ -46,9 +46,15 @@ export default function ScreenshotMode({ onBack, backendUrl, onCaptured }) {
     };
   }, []);
 
-  // C (or Space) triggers a capture, mirroring CameraMode's shortcut.
+  // C (or Space) triggers a capture; B returns to the menu — mirroring
+  // CameraMode's shortcuts. B works in any state so you can always back out.
   useEffect(() => {
     function handleKeyDown(event) {
+      if (event.key.toLowerCase() === 'b') {
+        event.preventDefault();
+        onBack();
+        return;
+      }
       if (status === 'requesting' || status === 'processing') return;
       if (event.key === ' ' || event.key.toLowerCase() === 'c') {
         event.preventDefault();
@@ -234,9 +240,10 @@ export default function ScreenshotMode({ onBack, backendUrl, onCaptured }) {
 
         <button
           onClick={onBack}
-          className="rounded-xl border-3 border-border bg-yellow px-6 py-3 text-lg font-bold text-text shadow-brutal transition-all active:translate-x-1 active:translate-y-1 active:shadow-brutal-sm"
+          className="inline-flex items-center gap-2 rounded-xl border-3 border-border bg-yellow px-6 py-3 text-lg font-bold text-text shadow-brutal transition-all active:translate-x-1 active:translate-y-1 active:shadow-brutal-sm"
         >
           Back to Menu
+          <kbd className="rounded-md border-3 border-border bg-cardBg px-2 py-0.5 text-sm font-extrabold">B</kbd>
         </button>
       </div>
 
