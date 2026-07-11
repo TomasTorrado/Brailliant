@@ -54,6 +54,30 @@ app.add_middleware(
 serial_link = SerialLink()
 
 
+# Camera Movement Standard (see docs/protocol.md and the design sketch).
+#
+# Reuses the same physical 6-pin cell as reading, but instead of a letter each
+# pattern raises the dots that physically "point" the way the user should move
+# the camera to bring the detected object toward the centre of the frame. The
+# arrow points at the object: object sitting high-left -> raise the top-left
+# dot, etc. "centered" raises all six as a distinct "locked on / hold still"
+# buzz. Dot numbering matches everything else: bit0=dot1 ... bit5=dot6, layout
+#   1 4
+#   2 5
+#   3 6
+CAMERA_DIRECTION_PATTERNS = {
+    "up": 9,            # dots 1,4  — top edge
+    "down": 36,         # dots 3,6  — bottom edge
+    "left": 7,          # dots 1,2,3 — left column
+    "right": 56,        # dots 4,5,6 — right column
+    "up-left": 1,       # dot 1     — top-left corner
+    "up-right": 8,      # dot 4     — top-right corner
+    "down-left": 4,     # dot 3     — bottom-left corner
+    "down-right": 32,   # dot 6     — bottom-right corner
+    "centered": 63,     # all six   — target acquired
+}
+
+
 class TextPayload(BaseModel):
     text: str
 
@@ -193,6 +217,22 @@ async def actuate_letter(letter: str):
     pattern = BRAILLE_MAP[key]
     serial_link.send_byte(pattern)
     return {"letter": key, "pattern": pattern}
+
+
+@app.post("/guide/{direction}")
+async def guide_camera(direction: str):
+    """Drive the solenoids to guide the camera toward a detected object.
+
+    Independent of the reader state (like /actuate): Camera Mode's live
+    detection loop POSTs the current direction here whenever it changes, and we
+    translate it to its Camera Movement Standard dot pattern and push it to the
+    ESP32 so a blind user can feel which way to move the camera.
+    """
+    if direction not in CAMERA_DIRECTION_PATTERNS:
+        raise HTTPException(status_code=400, detail=f"Unknown direction: {direction!r}")
+    pattern = CAMERA_DIRECTION_PATTERNS[direction]
+    serial_link.send_byte(pattern)
+    return {"direction": direction, "pattern": pattern}
 
 
 @app.websocket("/ws")
