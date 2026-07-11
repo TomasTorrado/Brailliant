@@ -1,8 +1,9 @@
 // LandingPage.jsx
 //
-// Entry screen shown before any reading session. Offers two input modes:
-//   - Camera mode  (press M) — read printed text through the device camera.
-//   - PDF mode     (press X) — the existing upload-a-PDF flow.
+// Entry screen shown before any reading session. Offers three input modes:
+//   - Camera mode     (press M) — read printed text through the device camera.
+//   - Screenshot mode (press S) — capture the screen and read whatever's on it.
+//   - PDF mode        (press X) — the existing upload-a-PDF flow.
 // Clicking a card or pressing its key hands the chosen mode back up to App,
 // which swaps in the matching screen. This is UI-only routing; each mode
 // keeps its own existing behaviour.
@@ -56,13 +57,23 @@ function PDFIcon() {
   );
 }
 
+function ScreenshotIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="h-8 w-8 text-text">
+      <path d="M4 8V6a2 2 0 0 1 2-2h2M4 16v2a2 2 0 0 0 2 2h2M20 8V6a2 2 0 0 0-2-2h-2M20 16v2a2 2 0 0 1-2 2h-2" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
 export default function LandingPage({ onSelectMode }) {
-  // Global hotkeys: M -> camera, X -> PDF. Case-insensitive so caps lock or a
-  // held shift still works.
+  // Global hotkeys: M -> camera, S -> screenshot, X -> PDF. Case-insensitive
+  // so caps lock or a held shift still works.
   useEffect(() => {
     function handleKeyDown(event) {
       const key = event.key.toLowerCase();
       if (key === 'm') onSelectMode('camera');
+      else if (key === 's') onSelectMode('screenshot');
       else if (key === 'x') onSelectMode('pdf');
     }
     window.addEventListener('keydown', handleKeyDown);
@@ -79,7 +90,7 @@ export default function LandingPage({ onSelectMode }) {
         </p>
       </div>
 
-      <div className="flex w-full flex-col items-stretch justify-center gap-8 sm:flex-row">
+      <div className="flex w-full flex-col items-stretch justify-center gap-8 sm:flex-row sm:flex-wrap">
         <ModeCard
           hotkey="M"
           title="Camera Mode"
@@ -87,6 +98,14 @@ export default function LandingPage({ onSelectMode }) {
           accent="bg-teal"
           icon={<CameraIcon />}
           onSelect={() => onSelectMode('camera')}
+        />
+        <ModeCard
+          hotkey="S"
+          title="Screenshot Mode"
+          description="Capture your screen and read whatever's on it."
+          accent="bg-purple"
+          icon={<ScreenshotIcon />}
+          onSelect={() => onSelectMode('screenshot')}
         />
         <ModeCard
           hotkey="X"
@@ -99,7 +118,8 @@ export default function LandingPage({ onSelectMode }) {
       </div>
 
       <p className="text-sm font-bold uppercase tracking-widest text-subtext">
-        Press <kbd className="mx-1 rounded-md border-3 border-border bg-cardBg px-2 py-0.5 text-text">M</kbd>
+        Press <kbd className="mx-1 rounded-md border-3 border-border bg-cardBg px-2 py-0.5 text-text">M</kbd>,
+        <kbd className="mx-1 rounded-md border-3 border-border bg-cardBg px-2 py-0.5 text-text">S</kbd>,
         or <kbd className="mx-1 rounded-md border-3 border-border bg-cardBg px-2 py-0.5 text-text">X</kbd>
         to begin
       </p>

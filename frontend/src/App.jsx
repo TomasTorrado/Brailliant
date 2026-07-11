@@ -1,10 +1,11 @@
 // App.jsx
 //
 // Top-level component. Screens:
-//   0. LandingPage — pick an input mode (M = camera, X = PDF).
-//   1. CameraMode  — live camera preview (UI shell for future OCR reading).
-//   2. PDFUploader — pick a PDF, POST it to the backend.
-//   3. Reader view — open a WebSocket to the backend and render whatever
+//   0. LandingPage    — pick an input mode (M = camera, S = screenshot, X = PDF).
+//   1. CameraMode     — live camera preview, captures + OCRs a frame client-side.
+//   2. ScreenshotMode — captures the screen (getDisplayMedia) + OCRs it client-side.
+//   3. PDFUploader    — pick a PDF, POST it to the backend.
+//   4. Reader view — open a WebSocket to the backend and render whatever
 //      step it sends. The hardware is a single Braille cell, so reading is
 //      fully manual: the backend only moves when a next/back command comes
 //      in (from the on-screen buttons or the ESP32's physical buttons), one
@@ -13,6 +14,7 @@
 import { useEffect, useRef, useState } from 'react';
 import LandingPage from './LandingPage';
 import CameraMode from './CameraMode';
+import ScreenshotMode from './ScreenshotMode';
 import PDFUploader from './PDFUploader';
 import WordDisplay from './WordDisplay';
 import BrailleCell from './BrailleCell';
@@ -76,7 +78,7 @@ function Header({ dark, onToggleDark }) {
 }
 
 export default function App() {
-  const [mode, setMode] = useState(null); // null (landing) | 'camera' | 'pdf'
+  const [mode, setMode] = useState(null); // null (landing) | 'camera' | 'screenshot' | 'pdf'
   const [uploaded, setUploaded] = useState(false);
   const [wordCount, setWordCount] = useState(0);
   const [word, setWord] = useState('');
@@ -242,6 +244,15 @@ export default function App() {
           </>
         ) : mode === 'camera' ? (
           <CameraMode
+            onBack={handleBackToMenu}
+            backendUrl={BACKEND_HTTP_URL}
+            onCaptured={(data) => {
+              setWordCount(data.word_count);
+              setUploaded(true);
+            }}
+          />
+        ) : mode === 'screenshot' ? (
+          <ScreenshotMode
             onBack={handleBackToMenu}
             backendUrl={BACKEND_HTTP_URL}
             onCaptured={(data) => {
