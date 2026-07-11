@@ -23,9 +23,9 @@ import asyncio
 
 from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-import fitz  # PyMuPDF
 
 from serial_comm import SerialLink
+from text_prep import extract_pdf_text
 from translator import translate_to_words
 
 app = FastAPI()
@@ -119,11 +119,9 @@ async def broadcast_control(command):
 
 @app.post("/upload")
 async def upload_pdf(file: UploadFile = File(...)):
-    """Accept a PDF, extract its text with PyMuPDF, and load it for reading."""
+    """Accept a PDF, extract its text, and load it for reading."""
     pdf_bytes = await file.read()
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    text = "\n".join(page.get_text() for page in doc)
-    doc.close()
+    text = extract_pdf_text(pdf_bytes)
 
     state.load(text)
     return {"word_count": len(state.words)}
