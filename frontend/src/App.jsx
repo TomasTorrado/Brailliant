@@ -198,26 +198,7 @@ export default function App() {
       <main className="flex flex-1 flex-col items-center justify-center gap-10 p-8">
         {mode === null ? (
           <LandingPage onSelectMode={setMode} />
-        ) : mode === 'camera' ? (
-          <CameraMode onBack={handleBackToMenu} />
-        ) : !uploaded ? (
-          <div className="flex w-full flex-col items-center gap-6">
-            <PDFUploader
-              backendUrl={BACKEND_HTTP_URL}
-              onUploaded={(data) => {
-                setWordCount(data.word_count);
-                setUploaded(true);
-              }}
-            />
-            <button
-              onClick={handleBackToMenu}
-              className="inline-flex items-center gap-2 rounded-xl border-3 border-border bg-cardBg px-6 py-3 text-lg font-bold text-text shadow-brutal transition-all active:translate-x-1 active:translate-y-1 active:shadow-brutal-sm"
-            >
-              Back to Menu
-              <kbd className="rounded-md border-3 border-border bg-bg px-2 py-0.5 text-sm font-extrabold">B</kbd>
-            </button>
-          </div>
-        ) : (
+        ) : uploaded ? (
           <>
             <p className="mt-4 text-base font-bold uppercase tracking-widest text-subtext">
               {connected ? `Connected · ${wordCount} words` : 'Connecting…'}
@@ -259,6 +240,32 @@ export default function App() {
               </button>
             </div>
           </>
+        ) : mode === 'camera' ? (
+          <CameraMode
+            onBack={handleBackToMenu}
+            backendUrl={BACKEND_HTTP_URL}
+            onCaptured={(data) => {
+              setWordCount(data.word_count);
+              setUploaded(true);
+            }}
+          />
+        ) : (
+          <div className="flex w-full flex-col items-center gap-6">
+            <PDFUploader
+              backendUrl={BACKEND_HTTP_URL}
+              onUploaded={(data) => {
+                setWordCount(data.word_count);
+                setUploaded(true);
+              }}
+            />
+            <button
+              onClick={handleBackToMenu}
+              className="inline-flex items-center gap-2 rounded-xl border-3 border-border bg-cardBg px-6 py-3 text-lg font-bold text-text shadow-brutal transition-all active:translate-x-1 active:translate-y-1 active:shadow-brutal-sm"
+            >
+              Back to Menu
+              <kbd className="rounded-md border-3 border-border bg-bg px-2 py-0.5 text-sm font-extrabold">B</kbd>
+            </button>
+          </div>
         )}
       </main>
     </div>

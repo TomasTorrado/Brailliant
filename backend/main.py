@@ -3,9 +3,10 @@
 # FastAPI backend for the Braille reader MVP.
 #
 # Flow:
-#   1. Client POSTs a PDF to /upload. We extract its text with PyMuPDF and
-#      translate it into a list of words, each with its Braille dot
-#      patterns (see translator.py).
+#   1. Client POSTs a PDF to /upload (extracted server-side with PyMuPDF) or
+#      already-extracted text to /upload-text (e.g. from camera OCR run
+#      client-side) — either way we translate it into a list of words, each
+#      with its Braille dot patterns (see translator.py).
 #   2. Client opens a WebSocket at /ws. Since the hardware is a single
 #      6-pin Braille cell, only one letter can ever be displayed at a time
 #      — so reading is fully manual, letter by letter: every "next"/"back"
@@ -23,6 +24,7 @@ import asyncio
 
 from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 from serial_comm import SerialLink
 from text_prep import extract_pdf_text
@@ -40,6 +42,10 @@ app.add_middleware(
 )
 
 serial_link = SerialLink()
+
+
+class TextPayload(BaseModel):
+    text: str
 
 
 class ReaderState:
@@ -124,6 +130,13 @@ async def upload_pdf(file: UploadFile = File(...)):
     text = extract_pdf_text(pdf_bytes)
 
     state.load(text)
+    return {"word_count": len(state.words)}
+
+
+@app.post("/upload-text")
+async def upload_text(payload: TextPayload):
+    """Accept already-extracted text (e.g. camera OCR) and load it for reading."""
+    state.load(payload.text)
     return {"word_count": len(state.words)}
 
 
