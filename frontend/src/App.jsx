@@ -1,11 +1,12 @@
 // App.jsx
 //
 // Top-level component. Screens:
-//   0. LandingPage — pick an input mode (M = camera, X = PDF, L = learn).
-//   1. CameraMode  — live camera preview (UI shell for future OCR reading).
-//   2. LearnMode   — step through the Braille alphabet A-Z; each letter
+//   0. LandingPage    — pick an input mode (M = camera, S = screenshot, X = PDF, L = learn).
+//   1. CameraMode     — live camera preview, captures + OCRs a frame client-side.
+//   2. ScreenshotMode — captures the screen (getDisplayMedia) + OCRs it client-side.
+//   3. LearnMode      — step through the Braille alphabet A-Z; each letter
 //      POSTs /actuate/{letter} so the solenoid cell shows the same dots.
-//   3. PDFUploader — pick a PDF, POST it to the backend.
+//   4. PDFUploader    — pick a PDF, POST it to the backend.
 //   4. Reader view — open a WebSocket to the backend and render whatever
 //      step it sends. The hardware is a single Braille cell, so reading is
 //      fully manual: the backend only moves when a next/back command comes
@@ -15,6 +16,7 @@
 import { useEffect, useRef, useState } from 'react';
 import LandingPage from './LandingPage';
 import CameraMode from './CameraMode';
+import ScreenshotMode from './ScreenshotMode';
 import LearnMode from './LearnMode';
 import PDFUploader from './PDFUploader';
 import WordDisplay from './WordDisplay';
@@ -50,6 +52,17 @@ function ThemeToggle({ dark, onToggle }) {
   );
 }
 
+function DocumentEndMessage() {
+  return (
+    <div className="flex flex-col items-center gap-2 rounded-xl border-3 border-border bg-cardBg p-8 text-center shadow-brutal">
+      <p className="text-4xl font-extrabold text-text">End of Document</p>
+      <p className="text-base font-semibold text-subtext">
+        You've reached the end. Press Back to review the last word.
+      </p>
+    </div>
+  );
+}
+
 function ProgressBar({ current, total, percent }) {
   return (
     <div className="w-full max-w-md">
@@ -79,7 +92,7 @@ function Header({ dark, onToggleDark }) {
 }
 
 export default function App() {
-  const [mode, setMode] = useState(null); // null (landing) | 'camera' | 'pdf' | 'learn'
+  const [mode, setMode] = useState(null); // null (landing) | 'camera' | 'screenshot' | 'pdf' | 'learn'
   const [uploaded, setUploaded] = useState(false);
   const [wordCount, setWordCount] = useState(0);
   const [word, setWord] = useState('');
@@ -88,6 +101,7 @@ export default function App() {
   const [connected, setConnected] = useState(false);
   const [dark, setDark] = useState(false);
   const [wordIndex, setWordIndex] = useState(0);
+  const [documentEnded, setDocumentEnded] = useState(false);
   const wsRef = useRef(null);
   const prevStepRef = useRef({ type: null, index: null });
 
@@ -114,6 +128,8 @@ export default function App() {
       const message = JSON.parse(event.data);
       const prev = prevStepRef.current;
 
+      setDocumentEnded(message.type === 'document_end');
+
       if (message.type === 'letter') {
         // Backend doesn't send a word position, but "word_end -> letter" only
         // ever happens by stepping into the next word, so we can derive it.
@@ -131,6 +147,10 @@ export default function App() {
         setPatterns([]);
         setActiveIndex(-1);
         setWordIndex(0);
+      } else if (message.type === 'document_end') {
+        setWord('');
+        setPatterns([]);
+        setActiveIndex(-1);
       }
 
       prevStepRef.current = { type: message.type, index: message.index ?? null };
@@ -182,6 +202,7 @@ export default function App() {
     setWordIndex(0);
     setWordCount(0);
     setConnected(false);
+    setDocumentEnded(false);
   }
 
   // Return to the landing page and clear any in-progress reading session.
@@ -201,28 +222,7 @@ export default function App() {
       <main className="flex flex-1 flex-col items-center justify-center gap-10 p-8">
         {mode === null ? (
           <LandingPage onSelectMode={setMode} />
-        ) : mode === 'camera' ? (
-          <CameraMode onBack={handleBackToMenu} />
-        ) : mode === 'learn' ? (
-          <LearnMode backendUrl={BACKEND_HTTP_URL} onBack={handleBackToMenu} />
-        ) : !uploaded ? (
-          <div className="flex w-full flex-col items-center gap-6">
-            <PDFUploader
-              backendUrl={BACKEND_HTTP_URL}
-              onUploaded={(data) => {
-                setWordCount(data.word_count);
-                setUploaded(true);
-              }}
-            />
-            <button
-              onClick={handleBackToMenu}
-              className="inline-flex items-center gap-2 rounded-xl border-3 border-border bg-cardBg px-6 py-3 text-lg font-bold text-text shadow-brutal transition-all active:translate-x-1 active:translate-y-1 active:shadow-brutal-sm"
-            >
-              Back to Menu
-              <kbd className="rounded-md border-3 border-border bg-bg px-2 py-0.5 text-sm font-extrabold">B</kbd>
-            </button>
-          </div>
-        ) : (
+        ) : uploaded ? (
           <>
             <p className="mt-4 text-base font-bold uppercase tracking-widest text-subtext">
               {connected ? `Connected · ${wordCount} words` : 'Connecting…'}
@@ -230,9 +230,14 @@ export default function App() {
 
             <ProgressBar current={currentWordNumber} total={wordCount} percent={progressPercent} />
 
-            <WordDisplay word={word} activeIndex={activeIndex} />
-
-            <BrailleCell currentPattern={currentPattern} currentLabel={word[activeIndex] || ''} />
+            {documentEnded ? (
+              <DocumentEndMessage />
+            ) : (
+              <>
+                <WordDisplay word={word} activeIndex={activeIndex} />
+                <BrailleCell currentPattern={currentPattern} currentLabel={word[activeIndex] || ''} />
+              </>
+            )}
 
             <div className="flex gap-4">
               <button
@@ -264,6 +269,43 @@ export default function App() {
               </button>
             </div>
           </>
+        ) : mode === 'camera' ? (
+          <CameraMode
+            onBack={handleBackToMenu}
+            backendUrl={BACKEND_HTTP_URL}
+            onCaptured={(data) => {
+              setWordCount(data.word_count);
+              setUploaded(true);
+            }}
+          />
+        ) : mode === 'screenshot' ? (
+          <ScreenshotMode
+            onBack={handleBackToMenu}
+            backendUrl={BACKEND_HTTP_URL}
+            onCaptured={(data) => {
+              setWordCount(data.word_count);
+              setUploaded(true);
+            }}
+          />
+        ) : mode === 'learn' ? (
+          <LearnMode backendUrl={BACKEND_HTTP_URL} onBack={handleBackToMenu} />
+        ) : (
+          <div className="flex w-full flex-col items-center gap-6">
+            <PDFUploader
+              backendUrl={BACKEND_HTTP_URL}
+              onUploaded={(data) => {
+                setWordCount(data.word_count);
+                setUploaded(true);
+              }}
+            />
+            <button
+              onClick={handleBackToMenu}
+              className="inline-flex items-center gap-2 rounded-xl border-3 border-border bg-cardBg px-6 py-3 text-lg font-bold text-text shadow-brutal transition-all active:translate-x-1 active:translate-y-1 active:shadow-brutal-sm"
+            >
+              Back to Menu
+              <kbd className="rounded-md border-3 border-border bg-bg px-2 py-0.5 text-sm font-extrabold">B</kbd>
+            </button>
+          </div>
         )}
       </main>
     </div>

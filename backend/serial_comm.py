@@ -1,8 +1,8 @@
 # serial_comm.py
 #
 # Handles the USB serial link to the ESP32. Sends one byte per character
-# (a 6-bit dot pattern) and listens for single-byte button events the
-# firmware sends back ('N' = next, 'B' = back).
+# (a 6-bit dot pattern) and reads back whatever the firmware echoes over
+# serial (its debug output — see main.py's poll_serial_debug).
 #
 # If no board is plugged in (or pyserial can't open the port), every method
 # fails gracefully and logs a message instead of crashing the backend, so
