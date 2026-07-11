@@ -9,14 +9,13 @@
     "dev:web": "vite",
     "build": "vite build && electron-builder -mwl",
     "build:web": "vite build",
+    "build:native": "swiftc electron/native/ocr_helper.swift -o electron/native/ocr_helper -O",
     "lint": "oxlint",
     "preview": "vite preview"
   },
   "dependencies": {
-    "@techstark/opencv-js": "^5.0.0-release.1",
     "react": "^19.2.7",
-    "react-dom": "^19.2.7",
-    "tesseract.js": "^7.0.0"
+    "react-dom": "^19.2.7"
   },
   "devDependencies": {
     "@types/react": "^19.2.17",

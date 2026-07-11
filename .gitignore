@@ -10,6 +10,7 @@ frontend/dist/
 frontend/dist-ssr/
 frontend/release/
 frontend/.env
+frontend/electron/native/ocr_helper
 frontend/*.local
 frontend/logs
 frontend/*.log

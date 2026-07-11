@@ -1,16 +1,23 @@
 // electron/main.cjs
 //
-// Electron main process: opens the desktop window and hosts the native PDF
-// file-picker dialog (invoked by the renderer via the preload contextBridge).
+// Electron main process: opens the desktop window and hosts native bridges
+// invoked by the renderer via the preload contextBridge — the PDF
+// file-picker dialog, and OCR via macOS's Vision framework (a compiled
+// Swift CLI helper, since the renderer can't call native macOS APIs
+// directly). See electron/native/ocr_helper.swift.
 //
 // In development it loads the Vite dev server (so HMR keeps working); once
 // packaged, it loads the built static files from dist/.
 
 const { app, BrowserWindow, ipcMain, dialog } = require('electron');
-const path = require('path');
+const { execFile } = require('child_process');
+const crypto = require('crypto');
 const fs = require('fs');
+const os = require('os');
+const path = require('path');
 
 const DEV_SERVER_URL = 'http://localhost:5173';
+const OCR_HELPER_PATH = path.join(__dirname, 'native', 'ocr_helper');
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -44,6 +51,30 @@ ipcMain.handle('open-pdf-dialog', async () => {
     name: path.basename(filePath),
     data: Uint8Array.from(buffer),
   };
+});
+
+// Runs OCR on a captured camera frame via macOS's Vision framework. The
+// renderer can't call native APIs directly, so this writes the frame to a
+// temp file, shells out to the compiled ocr_helper binary, and returns
+// whatever text it printed to stdout.
+ipcMain.handle('recognize-text', async (event, imageDataUrl) => {
+  const base64 = imageDataUrl.replace(/^data:image\/\w+;base64,/, '');
+  const tempPath = path.join(os.tmpdir(), `braille-ocr-${crypto.randomUUID()}.png`);
+  fs.writeFileSync(tempPath, Buffer.from(base64, 'base64'));
+
+  try {
+    return await new Promise((resolve, reject) => {
+      execFile(OCR_HELPER_PATH, [tempPath], (error, stdout, stderr) => {
+        if (error) {
+          reject(new Error(stderr || error.message));
+          return;
+        }
+        resolve(stdout.trim());
+      });
+    });
+  } finally {
+    fs.unlink(tempPath, () => {});
+  }
 });
 
 app.whenReady().then(createWindow);

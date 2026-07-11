@@ -2,88 +2,30 @@
 //
 // Live camera preview with a capture pipeline:
 //   1. Grab the current video frame onto a hidden canvas.
-//   2. Clean it up with OpenCV.js (grayscale + contrast enhancement) so
-//      real-world lighting/glare hurts Tesseract less.
-//   3. Run Tesseract.js OCR on the cleaned-up frame to get plain text.
-//   4. POST that text to the backend's /upload-text, then hand control back
+//   2. Run OCR via macOS's Vision framework (window.electronAPI.recognizeText
+//      — a native bridge to a compiled Swift helper, see
+//      electron/native/ocr_helper.swift) to get plain text. Vision is built
+//      for exactly this "text somewhere in a real-world photo" case — no
+//      preprocessing needed.
+//   3. POST that text to the backend's /upload-text, then hand control back
 //      to the parent via onCaptured — same shape as PDFUploader's
 //      onUploaded, so App.jsx swaps into the same reading view either way.
 //
 // No positioning/framing guidance yet (that's the solenoid-guided "next
 // step" — this just takes whatever's in frame when the user captures).
+//
+// This capture pipeline is Electron-only (window.electronAPI.recognizeText
+// requires the native Vision bridge) — it won't work in a plain browser tab.
 
 import { useEffect, useRef, useState } from 'react';
-
-// tesseract.js and @techstark/opencv-js are both large (WASM + worker
-// scripts) — dynamically imported so PDF-only users never pay for them.
-// @techstark/opencv-js's module may already be initialized, still loading
-// (a Promise), or an object waiting on onRuntimeInitialized — this covers
-// all three per the package's own usage docs.
-async function getOpenCv() {
-  const { default: cvModule } = await import('@techstark/opencv-js');
-  if (cvModule instanceof Promise) return cvModule;
-  if (cvModule.Mat) return cvModule;
-  await new Promise((resolve) => {
-    cvModule.onRuntimeInitialized = resolve;
-  });
-  return cvModule;
-}
-
-// Grayscale -> upscale -> CLAHE (adaptive contrast) -> adaptive threshold,
-// in place on `canvas`. Tesseract's own docs recommend upscaling low-res
-// input; CLAHE fixes uneven real-world lighting. Adaptive (not global
-// Otsu) thresholding matters here specifically because the raw frame is a
-// whole scene — background, lighting, the person holding the item — not a
-// cropped, mostly-text image. A single global cutoff (Otsu) gets dominated
-// by all that background variation and shreds the entire frame into
-// arbitrary black/white noise; a per-neighborhood threshold judges each
-// small region against its own local brightness instead, so a bright
-// ceiling light and a dim card in the same frame don't fight over one
-// global value.
-//
-// Block size matters a lot: too small relative to letter stroke width and
-// every pixel inside a stroke looks similar to its (also-inside-the-stroke)
-// neighbors, so only the stroke's edges cross the threshold — hollow
-// outlines instead of solid filled letters. Humans read hollow outlines
-// fine (we complete shapes visually); Tesseract, trained on solid strokes,
-// does not. 41 keeps the window comfortably larger than a letter stroke.
-async function preprocessForOcr(canvas) {
-  const cv = await getOpenCv();
-  const src = cv.imread(canvas);
-  const gray = new cv.Mat();
-  const upscaled = new cv.Mat();
-  const enhanced = new cv.Mat();
-  const binary = new cv.Mat();
-  try {
-    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-    cv.resize(gray, upscaled, new cv.Size(0, 0), 2, 2, cv.INTER_CUBIC);
-    const clahe = new cv.CLAHE(2.0, new cv.Size(8, 8));
-    clahe.apply(upscaled, enhanced);
-    clahe.delete();
-    cv.adaptiveThreshold(enhanced, binary, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 41, 10);
-    cv.imshow(canvas, binary);
-  } finally {
-    src.delete();
-    gray.delete();
-    upscaled.delete();
-    enhanced.delete();
-    binary.delete();
-  }
-}
 
 export default function CameraMode({ onBack, backendUrl, onCaptured }) {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const streamRef = useRef(null);
-  const workerRef = useRef(null);
   // starting | live | error | capturing | processing
   const [status, setStatus] = useState('starting');
   const [errorMessage, setErrorMessage] = useState('');
-  // Debug preview: lets us actually see what the camera captured, what
-  // OpenCV produced after preprocessing, and what Tesseract read from it —
-  // so a bad result can be diagnosed as "blurry photo" vs. "bad OCR" vs.
-  // "preprocessing broke something," instead of guessing.
-  const [debugPreview, setDebugPreview] = useState(null); // { raw, processed, text } | null
 
   useEffect(() => {
     let cancelled = false;
@@ -125,8 +67,6 @@ export default function CameraMode({ onBack, backendUrl, onCaptured }) {
     return () => {
       cancelled = true;
       streamRef.current?.getTracks().forEach((t) => t.stop());
-      workerRef.current?.terminate();
-      workerRef.current = null;
     };
   }, []);
 
@@ -145,63 +85,38 @@ export default function CameraMode({ onBack, backendUrl, onCaptured }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status]);
 
-  // Capture + preprocess + OCR only — stops here and shows the debug
-  // preview so a "successful" (no-exception) but garbled read is still
-  // visible before anything gets sent to the reader. sendToReader() below
-  // is the explicit next step.
   async function capture() {
     const video = videoRef.current;
     const canvas = canvasRef.current;
     if (!video || !canvas) return;
 
+    if (!window.electronAPI?.recognizeText) {
+      setStatus('error');
+      setErrorMessage('Camera OCR requires the desktop app (native Vision bridge unavailable).');
+      return;
+    }
+
     setStatus('capturing');
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
     canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
-    const rawPreview = canvas.toDataURL('image/png');
-    setDebugPreview({ raw: rawPreview, processed: null, text: null });
+    const frame = canvas.toDataURL('image/png');
 
     setStatus('processing');
     try {
-      await preprocessForOcr(canvas);
-      const processedPreview = canvas.toDataURL('image/png');
-      setDebugPreview({ raw: rawPreview, processed: processedPreview, text: null });
+      const text = await window.electronAPI.recognizeText(frame);
 
-      if (!workerRef.current) {
-        // Explicit even though these match tesseract.js's own defaults: LSTM
-        // engine (which also gets the more accurate "best" trained data,
-        // vs. the legacy engine's data) and single-block page segmentation
-        // (skip full page-layout guessing, since we're feeding it one
-        // cropped-to-frame photo, not a multi-column page).
-        const { createWorker, OEM, PSM } = await import('tesseract.js');
-        workerRef.current = await createWorker('eng', OEM.LSTM_ONLY);
-        await workerRef.current.setParameters({ tessedit_pageseg_mode: PSM.SINGLE_BLOCK });
-      }
-      const {
-        data: { text },
-      } = await workerRef.current.recognize(canvas);
-      setDebugPreview({ raw: rawPreview, processed: processedPreview, text });
-      setStatus('live');
-    } catch (err) {
-      setStatus('live');
-      setErrorMessage(err?.message || 'Could not read text from that image.');
-    }
-  }
-
-  // Explicit hand-off to the reader, only once you've reviewed the debug
-  // preview and decided the OCR text is good enough to read.
-  async function sendToReader() {
-    try {
       const response = await fetch(`${backendUrl}/upload-text`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: debugPreview.text }),
+        body: JSON.stringify({ text }),
       });
       if (!response.ok) throw new Error(`Upload failed (${response.status})`);
       const data = await response.json();
       onCaptured(data);
     } catch (err) {
-      setErrorMessage(err?.message || 'Could not send that text to the reader.');
+      setStatus('live');
+      setErrorMessage(err?.message || 'Could not read text from that image.');
     }
   }
 
@@ -254,7 +169,7 @@ export default function CameraMode({ onBack, backendUrl, onCaptured }) {
         </span>
       </div>
 
-      {/* Hidden capture buffer — never shown, just used to grab + preprocess a frame. */}
+      {/* Hidden capture buffer — never shown, just used to grab a frame. */}
       <canvas ref={canvasRef} className="hidden" />
 
       <div className="flex gap-4">
@@ -274,57 +189,6 @@ export default function CameraMode({ onBack, backendUrl, onCaptured }) {
           Back to Menu
         </button>
       </div>
-
-      {debugPreview && (
-        <div className="flex w-full flex-col gap-4 rounded-xl border-3 border-border bg-cardBg p-4 text-left shadow-brutal">
-          <p className="text-xs font-bold uppercase tracking-widest text-subtext">
-            Debug: last capture (temporary — remove once OCR is tuned)
-          </p>
-
-          <div className="flex flex-wrap gap-4">
-            <div className="flex flex-col gap-1">
-              <span className="text-xs font-bold uppercase text-subtext">Raw frame</span>
-              <img src={debugPreview.raw} alt="Raw captured frame" className="max-h-64 rounded-lg border-3 border-border" />
-            </div>
-            {debugPreview.processed && (
-              <div className="flex flex-col gap-1">
-                <span className="text-xs font-bold uppercase text-subtext">After OpenCV preprocessing</span>
-                <img
-                  src={debugPreview.processed}
-                  alt="Preprocessed frame fed to Tesseract"
-                  className="max-h-64 rounded-lg border-3 border-border"
-                />
-              </div>
-            )}
-          </div>
-
-          {debugPreview.text !== null && (
-            <>
-              <div className="flex flex-col gap-1">
-                <span className="text-xs font-bold uppercase text-subtext">Raw OCR output</span>
-                <pre className="max-h-32 overflow-auto whitespace-pre-wrap rounded-lg border-3 border-border bg-bg p-3 text-sm text-text">
-                  {debugPreview.text || '(empty)'}
-                </pre>
-              </div>
-
-              <div className="flex gap-4">
-                <button
-                  onClick={sendToReader}
-                  className="rounded-xl border-3 border-border bg-primary px-6 py-3 text-lg font-bold text-text shadow-brutal transition-all active:translate-x-1 active:translate-y-1 active:shadow-brutal-sm"
-                >
-                  Use This Text
-                </button>
-                <button
-                  onClick={() => setDebugPreview(null)}
-                  className="rounded-xl border-3 border-border bg-cardBg px-6 py-3 text-lg font-bold text-text shadow-brutal transition-all active:translate-x-1 active:translate-y-1 active:shadow-brutal-sm"
-                >
-                  Retry
-                </button>
-              </div>
-            </>
-          )}
-        </div>
-      )}
     </div>
   );
 }

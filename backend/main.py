@@ -14,6 +14,9 @@
 #      or rewinds exactly one step. Finishing a word's last letter takes
 #      one extra "next" into a distinct word-end (blank cell) step before
 #      the next word's first letter appears; "back" mirrors this exactly.
+#      Stepping past the very last word's word-end step lands on a
+#      document-end step (all pins down) instead of wrapping back to the
+#      start; "next" is then a no-op until "back" undoes it.
 #   3. The ESP32's physical "next"/"back" buttons report back over the same
 #      serial connection ('N' / 'B' bytes). A background task polls for
 #      those and broadcasts them the same way the HTTP /next and /back
@@ -62,17 +65,21 @@ class ReaderState:
         self.words = []  # list of {"word": str, "patterns": [int, ...]}
         self.word_index = 0
         self.letter_index = 0
+        self.at_end = False
 
     def load(self, text):
         self.words = translate_to_words(text)
         self.word_index = 0
         self.letter_index = 0
+        self.at_end = False
 
     def current_step(self):
         if not self.words:
             return {"type": "empty"}
+        if self.at_end:
+            return {"type": "document_end"}
 
-        entry = self.words[self.word_index % len(self.words)]
+        entry = self.words[self.word_index]
         word = entry["word"]
 
         if self.letter_index >= len(word):
@@ -88,18 +95,27 @@ class ReaderState:
 
     def advance(self):
         """Move forward exactly one letter (or into/out of the word-end step)."""
-        if not self.words:
+        if not self.words or self.at_end:
             return
-        word_len = len(self.words[self.word_index % len(self.words)]["word"])
+        word_len = len(self.words[self.word_index]["word"])
         if self.letter_index < word_len:
             self.letter_index += 1
+        elif self.word_index == len(self.words) - 1:
+            # Stepping past the last word's word-end step ends the document,
+            # rather than wrapping back to the first word. word_index/
+            # letter_index are left exactly as-is (still the last word's
+            # word-end step) so back() can just clear at_end to undo this.
+            self.at_end = True
         else:
-            self.word_index = (self.word_index + 1) % len(self.words)
+            self.word_index += 1
             self.letter_index = 0
 
     def back(self):
         """Move backward exactly one letter (mirrors advance())."""
         if not self.words:
+            return
+        if self.at_end:
+            self.at_end = False
             return
         if self.letter_index > 0:
             self.letter_index -= 1
@@ -182,6 +198,11 @@ async def send_current_step(websocket):
     if step["type"] == "empty":
         serial_link.send_byte(0)
         await websocket.send_json({"type": "empty"})
+        return
+
+    if step["type"] == "document_end":
+        serial_link.send_byte(0)  # all pins down
+        await websocket.send_json({"type": "document_end"})
         return
 
     if step["type"] == "word_end":
