@@ -2,13 +2,11 @@
 //
 // Top-level component. Two screens:
 //   1. PDFUploader — pick a PDF, POST it to the backend.
-//   2. Reader view — open a WebSocket to the backend, advance through
-//      words/characters as events stream in, speak each word aloud with
-//      the Web Speech API, and render the current Braille cell.
-//
-// The backend is the source of truth for pacing (it paces itself to match
-// the physical solenoids), so the frontend just reacts to whatever event
-// arrives next.
+//   2. Reader view — open a WebSocket to the backend and render whatever
+//      step it sends. The hardware is a single Braille cell, so reading is
+//      fully manual: the backend only moves when a next/back command comes
+//      in (from the on-screen buttons or the ESP32's physical buttons), one
+//      letter at a time.
 
 import { useEffect, useRef, useState } from 'react';
 import PDFUploader from './PDFUploader';
@@ -93,31 +91,37 @@ export default function App() {
     ws.onmessage = (event) => {
       const message = JSON.parse(event.data);
 
-      if (message.type === 'word_start') {
+      if (message.type === 'letter') {
         setWord(message.word);
         setPatterns(message.patterns);
+        setActiveIndex(message.index);
+      } else if (message.type === 'word_end') {
+        setWord(message.word);
+        setPatterns([]);
         setActiveIndex(-1);
-        // Speak the whole word as soon as we know it, timed roughly to the
-        // character-by-character solenoid/highlight animation.
-        speak(message.word);
-      } else if (message.type === 'char') {
-        setActiveIndex((i) => i + 1);
       } else if (message.type === 'empty') {
         setWord('');
         setPatterns([]);
         setActiveIndex(-1);
       }
-      // "word_end" is a no-op on the frontend; the next word_start resets state.
     };
 
     return () => ws.close();
   }, [uploaded]);
 
-  function speak(text) {
-    if (!('speechSynthesis' in window)) return;
-    window.speechSynthesis.cancel(); // don't let words pile up
-    window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
-  }
+  // Arrow keys mirror the physical ESP32 buttons for testing without hardware:
+  // right = next, left = back.
+  useEffect(() => {
+    if (!uploaded) return;
+
+    function handleKeyDown(event) {
+      if (event.key === 'ArrowRight') sendControl('next');
+      else if (event.key === 'ArrowLeft') sendControl('back');
+    }
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [uploaded]);
 
   async function sendControl(command) {
     try {
@@ -160,10 +164,10 @@ export default function App() {
 
             <div className="flex gap-4">
               <button
-                onClick={() => sendControl('repeat')}
+                onClick={() => sendControl('back')}
                 className="rounded-xl border-3 border-border bg-purple px-6 py-3 text-lg font-bold text-text shadow-brutal transition-all active:translate-x-1 active:translate-y-1 active:shadow-brutal-sm"
               >
-                Repeat
+                Back
               </button>
               <button
                 onClick={() => sendControl('next')}

@@ -2,10 +2,14 @@
 
 Reads text from a PDF, translates it to Unified English Braille (UEB) dot
 patterns, and drives a physical 6-solenoid Braille cell over USB serial to
-an ESP32. A React frontend shows the current word (with the active letter
-highlighted), previews the current + next Braille cell, and reads each word
-aloud with the Web Speech API. Physical "next"/"repeat" buttons on the
-ESP32 control playback for both the hardware and the web UI.
+an ESP32. Since the hardware is a single Braille cell, reading is fully
+manual and letter-by-letter: a React frontend shows the current word (with
+the active letter highlighted) and previews the current + next Braille
+cell, and physical "next"/"back" buttons on the ESP32 (or the matching
+on-screen buttons) step forward/backward one letter at a time for both the
+hardware and the web UI. Finishing a word's last letter takes one extra
+"next" into a blank word-end step before the next word's first letter
+appears; "back" mirrors this exactly.
 
 ```
 braille-project/
@@ -23,14 +27,14 @@ ESP32 hardware to see the frontend + backend working end to end.
 - Listens on USB serial for one byte per character. Each byte is a 6-bit
   dot pattern (bit 0 = dot 1 ... bit 5 = dot 6); each bit drives one GPIO
   pin wired to a solenoid.
-- Listens on two button GPIO pins ("next" and "repeat"). On a press, sends
-  a single byte back over serial (`'N'` or `'R'`) so the backend advances
-  or repeats the current word.
+- Listens on two button GPIO pins ("next" and "back"). On a press, sends
+  a single byte back over serial (`'N'` or `'B'`) so the backend steps
+  forward or backward one letter.
 
 **Setup:**
 1. Open `firmware/esp32_braille.ino` in the Arduino IDE (or PlatformIO)
    with ESP32 board support installed.
-2. Edit the `DOT_PINS`, `NEXT_BUTTON_PIN`, and `REPEAT_BUTTON_PIN` constants
+2. Edit the `DOT_PINS`, `NEXT_BUTTON_PIN`, and `BACK_BUTTON_PIN` constants
    near the top of the file to match your wiring.
 3. Select your ESP32 board + serial port, then upload.
 4. The sketch has no dependencies beyond the standard `Arduino.h` framework.
@@ -51,8 +55,9 @@ Braille, and streams it to both the ESP32 (serial) and the frontend
   [pyserial](https://pyserial.readthedocs.io/). Fails gracefully (logs and
   continues) if no board is connected.
 - `main.py` — FastAPI app: `/upload` (PDF in, word count out), `/ws`
-  (streams word/character events), `/next` and `/repeat` (advance/replay,
-  callable from the web UI or the ESP32 buttons).
+  (streams the current letter/word-end step), `/next` and `/back` (step
+  forward/backward one letter, callable from the web UI or the ESP32
+  buttons).
 
 **Setup:**
 ```bash
@@ -61,7 +66,7 @@ python3 -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 
-cp .env.example .env             # adjust serial port / baud / timing if needed
+cp .env.example .env             # adjust serial port / baud if needed
 uvicorn main:app --reload --port 8000
 ```
 
@@ -75,20 +80,18 @@ the physical solenoids/buttons are inactive.
 |------------------------|-------------------|---------------------------------------|
 | `BRAILLE_SERIAL_PORT`  | `/dev/ttyUSB0`    | Serial port the ESP32 is on           |
 | `BRAILLE_BAUD_RATE`    | `9600`            | Must match the firmware's baud rate   |
-| `BRAILLE_CHAR_DELAY`   | `0.4` (seconds)   | Pause between streamed characters     |
-| `BRAILLE_WORD_DELAY`   | `0.6` (seconds)   | Pause between streamed words          |
 
 ## 3. Frontend (`frontend/`)
 
-React + Vite + Tailwind UI: upload a PDF, then watch/hear it read back
-word by word.
+React + Vite + Tailwind UI: upload a PDF, then step through it letter by
+letter with the on-screen (or ESP32) Next/Back buttons.
 
 - `PDFUploader.jsx` — drag-and-drop or click-to-select PDF upload screen.
 - `WordDisplay.jsx` — shows the current word, highlighting the active letter.
 - `BrailleCell.jsx` — renders the current and next Braille cell as filled
   (raised) / empty (lowered) dots.
-- `App.jsx` — wires it together: opens the `/ws` WebSocket, advances state
-  on incoming events, and speaks each word via `window.speechSynthesis`.
+- `App.jsx` — wires it together: opens the `/ws` WebSocket and updates state
+  on incoming letter/word-end events.
 
 **Setup:**
 ```bash
@@ -114,7 +117,7 @@ sure the backend is running first so the WebSocket can connect.
    without it, just without solenoids/buttons).
 2. Start the backend (`uvicorn main:app --reload --port 8000`).
 3. Start the frontend (`npm run dev`).
-4. Open the frontend, upload a PDF, and it starts reading — word by word,
-   spoken aloud, shown on screen, and (if connected) embossed on the
-   physical display. Use the on-screen Next/Repeat buttons or the ESP32's
-   physical buttons to move through the document.
+4. Open the frontend, upload a PDF, then use the on-screen Next/Back
+   buttons, the left/right arrow keys, or the ESP32's physical buttons to
+   step through it one letter at a time — shown on screen and (if
+   connected) embossed on the physical display.
