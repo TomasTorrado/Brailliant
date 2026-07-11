@@ -17,7 +17,6 @@ battery through a switch; the ESP32 is powered/programmed over USB.
 | BB1 | Solderless breadboard | 1 | 400-point (half-size) or larger. |
 | SOL1–SOL6 | 12 V micro push-pull solenoid | 6 | QINIZX open-frame, 4 mm stroke, ~460 mA, ~26 Ω, 5.5 W each. |
 | BT1 | LiPo battery, 3S (11.1 V) | 1 | Powers the solenoid rail; 3S matches the 12 V solenoids. |
-| J1 | XT60 connector (pair) | 1 | Battery-to-rail connection. |
 | SW1 | SPST toggle switch | 1 | Inline on the battery positive lead. |
 | W1 | Jumper wires (M–M) | ~20 | Signal and power. |
 | W2 | USB cable | 1 | ESP32 to computer (match your board's port). |
