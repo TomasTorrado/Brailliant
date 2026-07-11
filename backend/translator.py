@@ -1,11 +1,10 @@
 # translator.py
 #
-# Converts plain text into Unified English Braille (UEB) grade-1 dot patterns.
-#
-# Pipeline:
-#   1. Lowercase the text.
-#   2. Expand digits into their spelled-out words ("1" -> "one").
-#   3. Map every character to a 6-bit dot pattern using a hardcoded dictionary.
+# Converts text into Unified English Braille (UEB) grade-1 dot patterns.
+# Expects text already normalized by text_prep.clean_text (lowercase,
+# numbers spelled out, only letters/spaces left) — translate() and
+# translate_to_words() both clean their input themselves, so any raw text
+# from any source is safe to pass in directly.
 #
 # A Braille cell has 6 dots laid out as:
 #   1 4
@@ -16,20 +15,7 @@
 # bit3=dot4, bit4=dot5, bit5=dot6. This is the exact byte format sent over
 # serial to the ESP32, which reads bits 0-5 straight into its 6 solenoid pins.
 
-# Spoken words for digits 0-9, used to expand numbers before translation
-# since Braille dot patterns are only defined for letters here.
-DIGIT_WORDS = {
-    "0": "zero",
-    "1": "one",
-    "2": "two",
-    "3": "three",
-    "4": "four",
-    "5": "five",
-    "6": "six",
-    "7": "seven",
-    "8": "eight",
-    "9": "nine",
-}
+from text_prep import clean_text
 
 # Hardcoded UEB grade-1 alphabet: character -> tuple of raised dot numbers (1-6).
 BRAILLE_DOTS = {
@@ -75,42 +61,33 @@ def _dots_to_byte(dots):
 BRAILLE_MAP = {ch: _dots_to_byte(dots) for ch, dots in BRAILLE_DOTS.items()}
 
 
-def expand_digits(text):
-    """Replace each digit character with its spelled-out word (e.g. '1' -> 'one')."""
-    return "".join(DIGIT_WORDS.get(ch, ch) for ch in text)
-
-
 def translate(text):
     """
-    Translate a string into UEB Braille dot patterns.
+    Translate raw text into UEB Braille dot patterns.
 
     Returns a `bytes` object where each element is the 6-bit dot pattern
-    (0-63) for the corresponding character in the lowercased, digit-expanded
-    text. Characters with no Braille mapping (punctuation, symbols) are
-    dropped for this MVP.
+    (0-63) for the corresponding character after cleaning (see
+    text_prep.clean_text): numbers spelled out, punctuation/noise replaced
+    with spaces, everything lowercased.
     """
-    text = expand_digits(text.lower())
-    patterns = [BRAILLE_MAP[ch] for ch in text if ch in BRAILLE_MAP]
-    return bytes(patterns)
+    cleaned = clean_text(text)
+    return bytes(BRAILLE_MAP[ch] for ch in cleaned)
 
 
 def translate_to_words(text):
     """
-    Split text into words and translate each one independently, keeping the
-    word boundaries intact. This is what the WebSocket streaming in main.py
-    uses so it can step forward/backward one letter at a time and highlight
-    the active letter in sync with the dot patterns.
+    Clean raw text, split it into words, and translate each one
+    independently, keeping word boundaries intact. This is what the
+    WebSocket streaming in main.py uses so it can step forward/backward one
+    letter at a time and highlight the active letter in sync with the dot
+    patterns.
 
     Returns a list of dicts: {"word": <display string>, "patterns": [int, ...]}
     """
-    words = text.split()
+    cleaned = clean_text(text)
     result = []
-    for raw_word in words:
-        expanded = expand_digits(raw_word.lower())
-        # Keep only characters that have a Braille mapping so "word" and
-        # "patterns" stay the same length and index-aligned for the frontend.
-        display_word = "".join(ch for ch in expanded if ch in BRAILLE_MAP)
-        patterns = list(translate(raw_word))
+    for word in cleaned.split():
+        patterns = [BRAILLE_MAP[ch] for ch in word]
         if patterns:
-            result.append({"word": display_word, "patterns": patterns})
+            result.append({"word": word, "patterns": patterns})
     return result

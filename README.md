@@ -15,8 +15,13 @@ appears; "back" mirrors this exactly.
 braille-project/
 ├── firmware/       ESP32 Arduino sketch — drives solenoids, reads buttons
 ├── backend/        FastAPI server — PDF -> text -> Braille -> serial/WebSocket
-└── frontend/       React + Vite + Tailwind UI
+├── frontend/       React + Vite + Tailwind UI
+└── docs/           How it all actually works — see docs/README.md
 ```
+
+See [docs/](docs/README.md) for how the whole pipeline actually works —
+architecture, the text-to-Braille pipeline, the navigation state machine,
+and the exact wire protocol.
 
 Everything below can be run and tested independently — you don't need the
 ESP32 hardware to see the frontend + backend working end to end.
