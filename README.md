@@ -1,4 +1,4 @@
-# Braille Reader — Hackathon MVP
+# Braille Reader 
 
 Reads text from a PDF, translates it to Unified English Braille (UEB) dot
 patterns, and drives a physical 6-solenoid Braille cell over USB serial to
