@@ -1,14 +1,18 @@
 // App.jsx
 //
-// Top-level component. Two screens:
-//   1. PDFUploader — pick a PDF, POST it to the backend.
-//   2. Reader view — open a WebSocket to the backend and render whatever
+// Top-level component. Screens:
+//   0. LandingPage — pick an input mode (M = camera, X = PDF).
+//   1. CameraMode  — live camera preview (UI shell for future OCR reading).
+//   2. PDFUploader — pick a PDF, POST it to the backend.
+//   3. Reader view — open a WebSocket to the backend and render whatever
 //      step it sends. The hardware is a single Braille cell, so reading is
 //      fully manual: the backend only moves when a next/back command comes
 //      in (from the on-screen buttons or the ESP32's physical buttons), one
 //      letter at a time.
 
 import { useEffect, useRef, useState } from 'react';
+import LandingPage from './LandingPage';
+import CameraMode from './CameraMode';
 import PDFUploader from './PDFUploader';
 import WordDisplay from './WordDisplay';
 import BrailleCell from './BrailleCell';
@@ -72,6 +76,7 @@ function Header({ dark, onToggleDark }) {
 }
 
 export default function App() {
+  const [mode, setMode] = useState(null); // null (landing) | 'camera' | 'pdf'
   const [uploaded, setUploaded] = useState(false);
   const [wordCount, setWordCount] = useState(0);
   const [word, setWord] = useState('');
@@ -145,6 +150,19 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [uploaded]);
 
+  // On the PDF upload screen, B returns to the landing page (mirrors the
+  // on-screen "Back to Menu" button).
+  useEffect(() => {
+    if (mode !== 'pdf' || uploaded) return;
+
+    function handleKeyDown(event) {
+      if (event.key.toLowerCase() === 'b') handleBackToMenu();
+    }
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [mode, uploaded]);
+
   async function sendControl(command) {
     try {
       await fetch(`${BACKEND_HTTP_URL}/${command}`, { method: 'POST' });
@@ -163,6 +181,12 @@ export default function App() {
     setConnected(false);
   }
 
+  // Return to the landing page and clear any in-progress reading session.
+  function handleBackToMenu() {
+    handleNewDocument();
+    setMode(null);
+  }
+
   const currentPattern = activeIndex >= 0 ? patterns[activeIndex] : 0;
   const currentWordNumber = wordCount > 0 ? (((wordIndex % wordCount) + wordCount) % wordCount) + 1 : 0;
   const progressPercent = wordCount > 0 ? Math.round((currentWordNumber / wordCount) * 100) : 0;
@@ -172,14 +196,27 @@ export default function App() {
       <Header dark={dark} onToggleDark={() => setDark((d) => !d)} />
 
       <main className="flex flex-1 flex-col items-center justify-center gap-10 p-8">
-        {!uploaded ? (
-          <PDFUploader
-            backendUrl={BACKEND_HTTP_URL}
-            onUploaded={(data) => {
-              setWordCount(data.word_count);
-              setUploaded(true);
-            }}
-          />
+        {mode === null ? (
+          <LandingPage onSelectMode={setMode} />
+        ) : mode === 'camera' ? (
+          <CameraMode onBack={handleBackToMenu} />
+        ) : !uploaded ? (
+          <div className="flex w-full flex-col items-center gap-6">
+            <PDFUploader
+              backendUrl={BACKEND_HTTP_URL}
+              onUploaded={(data) => {
+                setWordCount(data.word_count);
+                setUploaded(true);
+              }}
+            />
+            <button
+              onClick={handleBackToMenu}
+              className="inline-flex items-center gap-2 rounded-xl border-3 border-border bg-cardBg px-6 py-3 text-lg font-bold text-text shadow-brutal transition-all active:translate-x-1 active:translate-y-1 active:shadow-brutal-sm"
+            >
+              Back to Menu
+              <kbd className="rounded-md border-3 border-border bg-bg px-2 py-0.5 text-sm font-extrabold">B</kbd>
+            </button>
+          </div>
         ) : (
           <>
             <p className="mt-4 text-base font-bold uppercase tracking-widest text-subtext">
@@ -207,12 +244,20 @@ export default function App() {
               </button>
             </div>
 
-            <button
-              onClick={handleNewDocument}
-              className="rounded-xl border-3 border-border bg-yellow px-6 py-3 text-lg font-bold text-text shadow-brutal transition-all active:translate-x-1 active:translate-y-1 active:shadow-brutal-sm"
-            >
-              Upload New Document
-            </button>
+            <div className="flex gap-4">
+              <button
+                onClick={handleNewDocument}
+                className="rounded-xl border-3 border-border bg-yellow px-6 py-3 text-lg font-bold text-text shadow-brutal transition-all active:translate-x-1 active:translate-y-1 active:shadow-brutal-sm"
+              >
+                Upload New Document
+              </button>
+              <button
+                onClick={handleBackToMenu}
+                className="rounded-xl border-3 border-border bg-cardBg px-6 py-3 text-lg font-bold text-text shadow-brutal transition-all active:translate-x-1 active:translate-y-1 active:shadow-brutal-sm"
+              >
+                Back to Menu
+              </button>
+            </div>
           </>
         )}
       </main>
