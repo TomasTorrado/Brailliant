@@ -9,11 +9,6 @@
 //   single byte back over serial so the backend can step forward/backward
 //   one letter at a time: 'N' for next, 'B' for back.
 //
-// NOTE: The Arduino/ESP32 framework has no concept of environment variables
-// at build time, so all configurable values below are grouped into one
-// `#define` block instead (the C++ equivalent for firmware). Change the pin
-// numbers here to match your wiring; everything else in the project uses
-// real environment variables (see backend/README).
 
 #include <Arduino.h>
 
@@ -21,13 +16,12 @@
 
 // One GPIO pin per Braille dot (dot 1 -> DOT_PIN[0], ... dot 6 -> DOT_PIN[5]).
 // Change these to match how the solenoids are wired on your board.
-const int DOT_PINS[6] = {13, 12, 14, 27, 26, 25};
+//
+//                       1  2  3   4   5   6
+const int DOT_PINS[6] = {4, 5, 18, 19, 13, 14};
 
-// Button pins. Wired with INPUT_PULLUP, so a press pulls the pin LOW.
-const int NEXT_BUTTON_PIN = 32;
-const int BACK_BUTTON_PIN = 33;
 
-const long SERIAL_BAUD_RATE = 9600;
+const long SERIAL_BAUD_RATE = 115200;
 
 // How long a solenoid stays energized for one dot pattern before the next
 // byte can overwrite it. Keep short so rapid characters don't blur together.
