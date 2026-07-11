@@ -1,10 +1,12 @@
 // App.jsx
 //
 // Top-level component. Screens:
-//   0. LandingPage — pick an input mode (M = camera, X = PDF).
+//   0. LandingPage — pick an input mode (M = camera, X = PDF, L = learn).
 //   1. CameraMode  — live camera preview (UI shell for future OCR reading).
-//   2. PDFUploader — pick a PDF, POST it to the backend.
-//   3. Reader view — open a WebSocket to the backend and render whatever
+//   2. LearnMode   — step through the Braille alphabet A-Z; each letter
+//      POSTs /actuate/{letter} so the solenoid cell shows the same dots.
+//   3. PDFUploader — pick a PDF, POST it to the backend.
+//   4. Reader view — open a WebSocket to the backend and render whatever
 //      step it sends. The hardware is a single Braille cell, so reading is
 //      fully manual: the backend only moves when a next/back command comes
 //      in (from the on-screen buttons or the ESP32's physical buttons), one
@@ -13,6 +15,7 @@
 import { useEffect, useRef, useState } from 'react';
 import LandingPage from './LandingPage';
 import CameraMode from './CameraMode';
+import LearnMode from './LearnMode';
 import PDFUploader from './PDFUploader';
 import WordDisplay from './WordDisplay';
 import BrailleCell from './BrailleCell';
@@ -76,7 +79,7 @@ function Header({ dark, onToggleDark }) {
 }
 
 export default function App() {
-  const [mode, setMode] = useState(null); // null (landing) | 'camera' | 'pdf'
+  const [mode, setMode] = useState(null); // null (landing) | 'camera' | 'pdf' | 'learn'
   const [uploaded, setUploaded] = useState(false);
   const [wordCount, setWordCount] = useState(0);
   const [word, setWord] = useState('');
@@ -200,6 +203,8 @@ export default function App() {
           <LandingPage onSelectMode={setMode} />
         ) : mode === 'camera' ? (
           <CameraMode onBack={handleBackToMenu} />
+        ) : mode === 'learn' ? (
+          <LearnMode backendUrl={BACKEND_HTTP_URL} onBack={handleBackToMenu} />
         ) : !uploaded ? (
           <div className="flex w-full flex-col items-center gap-6">
             <PDFUploader
