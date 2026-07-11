@@ -2,8 +2,38 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --color-bg: #fbeee4;
+  --color-card: #ffffff;
+  --color-text: #1a1a1a;
+  --color-subtext: #5c554d;
+  --color-border: #1a1a1a;
+  --color-shadow: #1a1a1a;
+  --color-primary: #f26d6d;
+  --color-purple: #a88bea;
+  --color-teal: #46c7b8;
+  --color-yellow: #f6d24b;
+  --color-toggle-bg: #f6d24b;
+  --color-dot-empty: #fbeee4;
+}
+
+.dark {
+  --color-bg: #211e1a;
+  --color-card: #312c26;
+  --color-text: #fbeee4;
+  --color-subtext: #b9afa4;
+  --color-border: #fbeee4;
+  --color-shadow: #000000;
+  --color-primary: #f26d6d;
+  --color-purple: #a88bea;
+  --color-teal: #46c7b8;
+  --color-yellow: #f6d24b;
+  --color-toggle-bg: #46c7b8;
+  --color-dot-empty: #312c26;
+}
+
 body {
-  @apply m-0 bg-neutral-950 text-neutral-100;
+  @apply m-0 bg-bg font-sans text-text transition-colors duration-300;
 }
 
 #root {
