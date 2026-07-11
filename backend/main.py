@@ -10,28 +10,35 @@
 #   2. Client opens a WebSocket at /ws. Since the hardware is a single
 #      6-pin Braille cell, only one letter can ever be displayed at a time
 #      — so reading is fully manual, letter by letter: every "next"/"back"
-#      command (from the web UI or the ESP32's physical buttons) advances
-#      or rewinds exactly one step. Finishing a word's last letter takes
-#      one extra "next" into a distinct word-end (blank cell) step before
-#      the next word's first letter appears; "back" mirrors this exactly.
-#      Stepping past the very last word's word-end step lands on a
-#      document-end step (all pins down) instead of wrapping back to the
-#      start; "next" is then a no-op until "back" undoes it.
-#   3. The ESP32's physical "next"/"back" buttons report back over the same
-#      serial connection ('N' / 'B' bytes). A background task polls for
-#      those and broadcasts them the same way the HTTP /next and /back
-#      endpoints do, so the button and the web UI control the same reading
-#      session.
+#      command (from the web UI's buttons/arrow keys) advances or rewinds
+#      exactly one step. Finishing a word's last letter takes one extra
+#      "next" into a distinct word-end (blank cell) step before the next
+#      word's first letter appears; "back" mirrors this exactly. Stepping
+#      past the very last word's word-end step lands on a document-end
+#      step (all pins down) instead of wrapping back to the start; "next"
+#      is then a no-op until "back" undoes it.
+#   3. Next/back navigation comes only from the web UI (its buttons/arrow
+#      keys POST to /next and /back) — the ESP32 just drives solenoids and
+#      echoes every byte it receives back over serial, which a background
+#      task relays to our console for debugging.
 
 import asyncio
+from pathlib import Path
 
-from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from dotenv import load_dotenv
 
-from serial_comm import SerialLink
-from text_prep import extract_pdf_text
-from translator import translate_to_words
+# Load backend/.env before importing serial_comm, which reads
+# BRAILLE_SERIAL_PORT / BRAILLE_BAUD_RATE from the environment at import time.
+# Running `uvicorn main:app` does NOT auto-load .env, so we do it explicitly.
+load_dotenv(Path(__file__).with_name(".env"))
+
+from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect  # noqa: E402
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+from pydantic import BaseModel  # noqa: E402
+
+from serial_comm import SerialLink  # noqa: E402
+from text_prep import extract_pdf_text  # noqa: E402
+from translator import translate_to_words  # noqa: E402
 
 app = FastAPI()
 
@@ -158,14 +165,14 @@ async def upload_text(payload: TextPayload):
 
 @app.post("/next")
 async def next_step():
-    """Advance one letter. Called by the frontend or the ESP32 'next' button."""
+    """Advance one letter. Called by the frontend's Next button/arrow key."""
     await broadcast_control("next")
     return {"ok": True}
 
 
 @app.post("/back")
 async def back_step():
-    """Rewind one letter. Called by the frontend or the ESP32 'back' button."""
+    """Rewind one letter. Called by the frontend's Back button/arrow key."""
     await broadcast_control("back")
     return {"ok": True}
 
@@ -221,17 +228,27 @@ async def send_current_step(websocket):
     )
 
 
-async def poll_serial_buttons():
-    """Background task: watch for 'N'/'B' button-event bytes sent back by the ESP32."""
+async def poll_serial_debug():
+    """Background task: relay the ESP32's serial debug output to our console.
+
+    The ESP32 echoes every byte it receives (see firmware handleIncomingSerial),
+    so this prints the board's view of the data right next to the "sent byte"
+    logs — useful because the USB port can only be held by one program, so the
+    Arduino Serial Monitor can't be open at the same time as this backend.
+    """
+    buffer = b""
     while True:
-        event = serial_link.read_button_event()
-        if event == b"N":
-            await broadcast_control("next")
-        elif event == b"B":
-            await broadcast_control("back")
+        data = serial_link.read_available()
+        if data:
+            buffer += data
+            while b"\n" in buffer:
+                line, buffer = buffer.split(b"\n", 1)
+                text = line.decode(errors="replace").rstrip("\r")
+                if text:
+                    print(f"[esp32] {text}")
         await asyncio.sleep(0.05)
 
 
 @app.on_event("startup")
 async def on_startup():
-    asyncio.create_task(poll_serial_buttons())
+    asyncio.create_task(poll_serial_debug())
