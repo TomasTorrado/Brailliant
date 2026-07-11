@@ -20,7 +20,7 @@ const BACKEND_WS_URL = import.meta.env.VITE_BACKEND_WS_URL || 'ws://localhost:80
 // cell, rendered in a rounded neobrutalist chip.
 function LogoMark() {
   return (
-    <div className="flex h-9 w-9 items-center justify-center rounded-xl border-3 border-border bg-primary shadow-brutal-sm">
+    <div className="flex h-9 w-9 items-center justify-center rounded-xl border-3 border-border bg-yellow shadow-brutal-sm">
       <div className="grid grid-cols-2 gap-[3px]">
         {Array.from({ length: 6 }).map((_, i) => (
           <span key={i} className="block h-1.5 w-1.5 rounded-full bg-text" />
@@ -38,15 +38,24 @@ function ThemeToggle({ dark, onToggle }) {
       aria-checked={dark}
       aria-label="Toggle dark mode"
       onClick={onToggle}
-      className="relative h-8 w-14 shrink-0 overflow-hidden rounded-full border-3 border-border bg-toggleBg transition-colors duration-300"
-    >
-      <span
-        className={
-          'absolute top-1/2 h-5 w-5 -translate-y-1/2 rounded-full border-3 border-border bg-cardBg shadow-brutal-sm transition-transform duration-300 ' +
-          (dark ? 'translate-x-7' : 'translate-x-1')
-        }
-      />
-    </button>
+      className="h-8 w-14 shrink-0 rounded-full border-3 border-border bg-toggleBg transition-colors duration-300"
+    />
+  );
+}
+
+function ProgressBar({ current, total, percent }) {
+  return (
+    <div className="w-full max-w-md">
+      <div className="mb-2 flex items-center justify-between text-lg font-bold text-subtext">
+        <span>
+          Word {current} of {total}
+        </span>
+        <span>{percent}%</span>
+      </div>
+      <div className="h-8 w-full overflow-hidden rounded-full border-3 border-border bg-cardBg">
+        <div className="h-full bg-teal transition-all duration-300" style={{ width: `${percent}%` }} />
+      </div>
+    </div>
   );
 }
 
@@ -70,7 +79,9 @@ export default function App() {
   const [activeIndex, setActiveIndex] = useState(-1);
   const [connected, setConnected] = useState(false);
   const [dark, setDark] = useState(false);
+  const [wordIndex, setWordIndex] = useState(0);
   const wsRef = useRef(null);
+  const prevStepRef = useRef({ type: null, index: null });
 
   // Purely presentational: reflects the toggle by swapping the `.dark` class
   // that index.css uses to switch the design-token CSS variables. Doesn't
@@ -82,6 +93,9 @@ export default function App() {
   useEffect(() => {
     if (!uploaded) return;
 
+    prevStepRef.current = { type: null, index: null };
+    setWordIndex(0);
+
     const ws = new WebSocket(BACKEND_WS_URL);
     wsRef.current = ws;
 
@@ -90,12 +104,17 @@ export default function App() {
 
     ws.onmessage = (event) => {
       const message = JSON.parse(event.data);
+      const prev = prevStepRef.current;
 
       if (message.type === 'letter') {
+        // Backend doesn't send a word position, but "word_end -> letter" only
+        // ever happens by stepping into the next word, so we can derive it.
+        if (prev.type === 'word_end') setWordIndex((i) => i + 1);
         setWord(message.word);
         setPatterns(message.patterns);
         setActiveIndex(message.index);
       } else if (message.type === 'word_end') {
+        if (prev.type === 'letter' && prev.index === 0) setWordIndex((i) => i - 1);
         setWord(message.word);
         setPatterns([]);
         setActiveIndex(-1);
@@ -103,7 +122,10 @@ export default function App() {
         setWord('');
         setPatterns([]);
         setActiveIndex(-1);
+        setWordIndex(0);
       }
+
+      prevStepRef.current = { type: message.type, index: message.index ?? null };
     };
 
     return () => ws.close();
@@ -131,8 +153,19 @@ export default function App() {
     }
   }
 
+  function handleNewDocument() {
+    setUploaded(false);
+    setWord('');
+    setPatterns([]);
+    setActiveIndex(-1);
+    setWordIndex(0);
+    setWordCount(0);
+    setConnected(false);
+  }
+
   const currentPattern = activeIndex >= 0 ? patterns[activeIndex] : 0;
-  const nextPattern = activeIndex + 1 < patterns.length ? patterns[activeIndex + 1] : 0;
+  const currentWordNumber = wordCount > 0 ? (((wordIndex % wordCount) + wordCount) % wordCount) + 1 : 0;
+  const progressPercent = wordCount > 0 ? Math.round((currentWordNumber / wordCount) * 100) : 0;
 
   return (
     <div className="flex min-h-screen flex-col bg-bg text-text transition-colors duration-300">
@@ -149,18 +182,15 @@ export default function App() {
           />
         ) : (
           <>
-            <p className="text-sm font-bold uppercase tracking-widest text-subtext">
+            <p className="mt-4 text-base font-bold uppercase tracking-widest text-subtext">
               {connected ? `Connected · ${wordCount} words` : 'Connecting…'}
             </p>
 
+            <ProgressBar current={currentWordNumber} total={wordCount} percent={progressPercent} />
+
             <WordDisplay word={word} activeIndex={activeIndex} />
 
-            <BrailleCell
-              currentPattern={currentPattern}
-              currentLabel={word[activeIndex] || ''}
-              nextPattern={nextPattern}
-              nextLabel={word[activeIndex + 1] || ''}
-            />
+            <BrailleCell currentPattern={currentPattern} currentLabel={word[activeIndex] || ''} />
 
             <div className="flex gap-4">
               <button
@@ -176,6 +206,13 @@ export default function App() {
                 Next
               </button>
             </div>
+
+            <button
+              onClick={handleNewDocument}
+              className="rounded-xl border-3 border-border bg-yellow px-6 py-3 text-lg font-bold text-text shadow-brutal transition-all active:translate-x-1 active:translate-y-1 active:shadow-brutal-sm"
+            >
+              Upload New Document
+            </button>
           </>
         )}
       </main>
