@@ -77,7 +77,6 @@ class ReaderState:
             "word": word,
             "patterns": entry["patterns"],
             "index": self.letter_index,
-            "char": word[self.letter_index],
             "pattern": entry["patterns"][self.letter_index],
         }
 
@@ -186,8 +185,6 @@ async def send_current_step(websocket):
             "word": step["word"],
             "patterns": step["patterns"],
             "index": step["index"],
-            "char": step["char"],
-            "pattern": step["pattern"],
         }
     )
 
