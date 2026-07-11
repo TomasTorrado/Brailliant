@@ -6,19 +6,20 @@
 #   1. Client POSTs a PDF to /upload. We extract its text with PyMuPDF and
 #      translate it into a list of words, each with its Braille dot
 #      patterns (see translator.py).
-#   2. Client opens a WebSocket at /ws. We stream the current word's
-#      characters one at a time: each character's dot pattern is written
-#      out over serial to the ESP32 (raising the solenoids) AND sent to the
-#      frontend (to render the BrailleCell + speak the letter), so hardware
-#      and UI stay in sync.
-#   3. The ESP32's physical "next"/"repeat" buttons report back over the
-#      same serial connection ('N' / 'R' bytes). A background task polls
-#      for those and broadcasts them the same way the HTTP /next and
-#      /repeat endpoints do, so the button and the web UI control the same
-#      reading session.
+#   2. Client opens a WebSocket at /ws. Since the hardware is a single
+#      6-pin Braille cell, only one letter can ever be displayed at a time
+#      — so reading is fully manual, letter by letter: every "next"/"back"
+#      command (from the web UI or the ESP32's physical buttons) advances
+#      or rewinds exactly one step. Finishing a word's last letter takes
+#      one extra "next" into a distinct word-end (blank cell) step before
+#      the next word's first letter appears; "back" mirrors this exactly.
+#   3. The ESP32's physical "next"/"back" buttons report back over the same
+#      serial connection ('N' / 'B' bytes). A background task polls for
+#      those and broadcasts them the same way the HTTP /next and /back
+#      endpoints do, so the button and the web UI control the same reading
+#      session.
 
 import asyncio
-import os
 
 from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -38,47 +39,81 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# How long to pause between characters / words while streaming, so the
-# solenoids, the frontend highlight, and the speech readout stay readable
-# and in sync. Overridable via environment variables.
-CHAR_DELAY = float(os.environ.get("BRAILLE_CHAR_DELAY", "0.4"))
-WORD_DELAY = float(os.environ.get("BRAILLE_WORD_DELAY", "0.6"))
-
 serial_link = SerialLink()
 
 
 class ReaderState:
-    """Holds the current document's words and the current playback position."""
+    """
+    Holds the current document's words and the current playback position.
+
+    Position is (word_index, letter_index), where letter_index runs from 0
+    to len(word) inclusive: 0..len(word)-1 select a letter, and
+    letter_index == len(word) is the word-end step (blank cell) between one
+    word and the next.
+    """
 
     def __init__(self):
         self.words = []  # list of {"word": str, "patterns": [int, ...]}
-        self.index = 0
+        self.word_index = 0
+        self.letter_index = 0
 
     def load(self, text):
         self.words = translate_to_words(text)
-        self.index = 0
+        self.word_index = 0
+        self.letter_index = 0
 
-    def current(self):
+    def current_step(self):
         if not self.words:
-            return None
-        return self.words[self.index % len(self.words)]
+            return {"type": "empty"}
+
+        entry = self.words[self.word_index % len(self.words)]
+        word = entry["word"]
+
+        if self.letter_index >= len(word):
+            return {"type": "word_end", "word": word}
+
+        return {
+            "type": "letter",
+            "word": word,
+            "patterns": entry["patterns"],
+            "index": self.letter_index,
+            "char": word[self.letter_index],
+            "pattern": entry["patterns"][self.letter_index],
+        }
 
     def advance(self):
-        if self.words:
-            self.index = (self.index + 1) % len(self.words)
+        """Move forward exactly one letter (or into/out of the word-end step)."""
+        if not self.words:
+            return
+        word_len = len(self.words[self.word_index % len(self.words)]["word"])
+        if self.letter_index < word_len:
+            self.letter_index += 1
+        else:
+            self.word_index = (self.word_index + 1) % len(self.words)
+            self.letter_index = 0
+
+    def back(self):
+        """Move backward exactly one letter (mirrors advance())."""
+        if not self.words:
+            return
+        if self.letter_index > 0:
+            self.letter_index -= 1
+        else:
+            self.word_index = (self.word_index - 1) % len(self.words)
+            self.letter_index = len(self.words[self.word_index]["word"])
 
 
 state = ReaderState()
 
 # Each connected frontend gets its own control queue (keyed by connection
-# id) so next/repeat events always reach the live WebSocket loop. Without
+# id) so next/back events always reach the live WebSocket loop. Without
 # this, a stale connection (e.g. from a page refresh) could sit forever
 # awaiting a shared queue and steal the event meant for the new one.
 connection_queues = {}
 
 
 async def broadcast_control(command):
-    """Fan a next/repeat event out to every currently-connected frontend."""
+    """Fan a next/back event out to every currently-connected frontend."""
     for queue in list(connection_queues.values()):
         await queue.put(command)
 
@@ -96,65 +131,75 @@ async def upload_pdf(file: UploadFile = File(...)):
 
 
 @app.post("/next")
-async def next_word():
-    """Advance to the next word. Called by the frontend or the ESP32 'next' button."""
+async def next_step():
+    """Advance one letter. Called by the frontend or the ESP32 'next' button."""
     await broadcast_control("next")
     return {"ok": True}
 
 
-@app.post("/repeat")
-async def repeat_word():
-    """Re-send the current word. Called by the frontend or the ESP32 'repeat' button."""
-    await broadcast_control("repeat")
+@app.post("/back")
+async def back_step():
+    """Rewind one letter. Called by the frontend or the ESP32 'back' button."""
+    await broadcast_control("back")
     return {"ok": True}
 
 
 @app.websocket("/ws")
 async def ws_endpoint(websocket: WebSocket):
-    """Streams the current word's characters, then waits for next/repeat commands."""
+    """Streams the current letter step, then waits for next/back commands."""
     await websocket.accept()
     my_queue = asyncio.Queue()
     connection_queues[id(websocket)] = my_queue
     try:
-        await stream_current_word(websocket)
+        await send_current_step(websocket)
         while True:
             command = await my_queue.get()
             if command == "next":
                 state.advance()
-            # "repeat" just re-streams the current word without advancing.
-            await stream_current_word(websocket)
+            elif command == "back":
+                state.back()
+            await send_current_step(websocket)
     except (WebSocketDisconnect, RuntimeError):
         pass
     finally:
         connection_queues.pop(id(websocket), None)
 
 
-async def stream_current_word(websocket):
-    """Send one word's characters, one at a time, to the frontend and the ESP32."""
-    entry = state.current()
-    if entry is None:
+async def send_current_step(websocket):
+    """Send the current step to the frontend and drive the physical solenoids."""
+    step = state.current_step()
+
+    if step["type"] == "empty":
+        serial_link.send_byte(0)
         await websocket.send_json({"type": "empty"})
         return
 
-    # Include the full pattern list up front so the frontend can preview the
-    # "next" Braille cell before its character event actually arrives.
-    await websocket.send_json({"type": "word_start", "word": entry["word"], "patterns": entry["patterns"]})
-    for ch, pattern in zip(entry["word"], entry["patterns"]):
-        serial_link.send_byte(pattern)
-        await websocket.send_json({"type": "char", "char": ch, "pattern": pattern})
-        await asyncio.sleep(CHAR_DELAY)
-    await websocket.send_json({"type": "word_end", "word": entry["word"]})
-    await asyncio.sleep(WORD_DELAY)
+    if step["type"] == "word_end":
+        serial_link.send_byte(0)  # blank cell between words
+        await websocket.send_json({"type": "word_end", "word": step["word"]})
+        return
+
+    serial_link.send_byte(step["pattern"])
+    await websocket.send_json(
+        {
+            "type": "letter",
+            "word": step["word"],
+            "patterns": step["patterns"],
+            "index": step["index"],
+            "char": step["char"],
+            "pattern": step["pattern"],
+        }
+    )
 
 
 async def poll_serial_buttons():
-    """Background task: watch for 'N'/'R' button-event bytes sent back by the ESP32."""
+    """Background task: watch for 'N'/'B' button-event bytes sent back by the ESP32."""
     while True:
         event = serial_link.read_button_event()
         if event == b"N":
             await broadcast_control("next")
-        elif event == b"R":
-            await broadcast_control("repeat")
+        elif event == b"B":
+            await broadcast_control("back")
         await asyncio.sleep(0.05)
 
 

@@ -2,7 +2,7 @@
 #
 # Handles the USB serial link to the ESP32. Sends one byte per character
 # (a 6-bit dot pattern) and listens for single-byte button events the
-# firmware sends back ('N' = next, 'R' = repeat).
+# firmware sends back ('N' = next, 'B' = back).
 #
 # If no board is plugged in (or pyserial can't open the port), every method
 # fails gracefully and logs a message instead of crashing the backend, so
@@ -47,7 +47,7 @@ class SerialLink:
     def read_button_event(self):
         """
         Non-blocking check for a button-event byte sent back by the ESP32.
-        Returns b'N', b'R', or None if nothing is waiting / no hardware.
+        Returns b'N', b'B', or None if nothing is waiting / no hardware.
         """
         if self.connection is None:
             return None

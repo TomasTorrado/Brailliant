@@ -98,8 +98,8 @@ def translate_to_words(text):
     """
     Split text into words and translate each one independently, keeping the
     word boundaries intact. This is what the WebSocket streaming in main.py
-    uses so it can advance/repeat a whole word at a time and highlight
-    letters in sync with the dot patterns.
+    uses so it can step forward/backward one letter at a time and highlight
+    the active letter in sync with the dot patterns.
 
     Returns a list of dicts: {"word": <display string>, "patterns": [int, ...]}
     """
