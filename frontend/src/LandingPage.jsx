@@ -1,9 +1,10 @@
 // LandingPage.jsx
 //
-// Entry screen shown before any reading session. Offers three input modes:
+// Entry screen shown before any reading session. Offers four modes:
 //   - Camera mode     (press M) — read printed text through the device camera.
 //   - Screenshot mode (press S) — capture the screen and read whatever's on it.
 //   - PDF mode        (press X) — the existing upload-a-PDF flow.
+//   - Learn mode      (press L) — step through the Braille alphabet A-Z.
 // Clicking a card or pressing its key hands the chosen mode back up to App,
 // which swaps in the matching screen. This is UI-only routing; each mode
 // keeps its own existing behaviour.
@@ -66,15 +67,30 @@ function ScreenshotIcon() {
   );
 }
 
+function AlphabetIcon() {
+  return (
+    <div className="flex items-center gap-1.5 text-text">
+      <span className="text-3xl font-extrabold leading-none">A</span>
+      <span className="grid grid-cols-2 gap-[3px]">
+        <span className="block h-1.5 w-1.5 rounded-full bg-text" />
+        {Array.from({ length: 5 }).map((_, i) => (
+          <span key={i} className="box-border block h-1.5 w-1.5 rounded-full border-2 border-text" />
+        ))}
+      </span>
+    </div>
+  );
+}
+
 export default function LandingPage({ onSelectMode }) {
-  // Global hotkeys: M -> camera, S -> screenshot, X -> PDF. Case-insensitive
-  // so caps lock or a held shift still works.
+  // Global hotkeys: M -> camera, S -> screenshot, X -> PDF, L -> learn.
+  // Case-insensitive so caps lock or a held shift still works.
   useEffect(() => {
     function handleKeyDown(event) {
       const key = event.key.toLowerCase();
       if (key === 'm') onSelectMode('camera');
       else if (key === 's') onSelectMode('screenshot');
       else if (key === 'x') onSelectMode('pdf');
+      else if (key === 'l') onSelectMode('learn');
     }
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
@@ -85,8 +101,8 @@ export default function LandingPage({ onSelectMode }) {
       <div>
         <h1 className="text-5xl font-extrabold text-text">Brailliant</h1>
         <p className="mt-3 max-w-xl text-lg text-subtext">
-          Choose how you want to read. Text is spoken word by word and embossed live on
-          the physical Braille display.
+          Choose how you want to read — or learn the alphabet. Text is spoken word by word and
+          embossed live on the physical Braille display.
         </p>
       </div>
 
@@ -115,12 +131,21 @@ export default function LandingPage({ onSelectMode }) {
           icon={<PDFIcon />}
           onSelect={() => onSelectMode('pdf')}
         />
+        <ModeCard
+          hotkey="L"
+          title="Learn Mode"
+          description="Learn the Braille alphabet, A to Z, and test yourself."
+          accent="bg-purple"
+          icon={<AlphabetIcon />}
+          onSelect={() => onSelectMode('learn')}
+        />
       </div>
 
       <p className="text-sm font-bold uppercase tracking-widest text-subtext">
         Press <kbd className="mx-1 rounded-md border-3 border-border bg-cardBg px-2 py-0.5 text-text">M</kbd>,
         <kbd className="mx-1 rounded-md border-3 border-border bg-cardBg px-2 py-0.5 text-text">S</kbd>,
-        or <kbd className="mx-1 rounded-md border-3 border-border bg-cardBg px-2 py-0.5 text-text">X</kbd>
+        <kbd className="mx-1 rounded-md border-3 border-border bg-cardBg px-2 py-0.5 text-text">X</kbd>,
+        or <kbd className="mx-1 rounded-md border-3 border-border bg-cardBg px-2 py-0.5 text-text">L</kbd>
         to begin
       </p>
     </div>

@@ -1,10 +1,12 @@
 // App.jsx
 //
 // Top-level component. Screens:
-//   0. LandingPage    — pick an input mode (M = camera, S = screenshot, X = PDF).
+//   0. LandingPage    — pick an input mode (M = camera, S = screenshot, X = PDF, L = learn).
 //   1. CameraMode     — live camera preview, captures + OCRs a frame client-side.
 //   2. ScreenshotMode — captures the screen (getDisplayMedia) + OCRs it client-side.
-//   3. PDFUploader    — pick a PDF, POST it to the backend.
+//   3. LearnMode      — step through the Braille alphabet A-Z; each letter
+//      POSTs /actuate/{letter} so the solenoid cell shows the same dots.
+//   4. PDFUploader    — pick a PDF, POST it to the backend.
 //   4. Reader view — open a WebSocket to the backend and render whatever
 //      step it sends. The hardware is a single Braille cell, so reading is
 //      fully manual: the backend only moves when a next/back command comes
@@ -15,6 +17,7 @@ import { useEffect, useRef, useState } from 'react';
 import LandingPage from './LandingPage';
 import CameraMode from './CameraMode';
 import ScreenshotMode from './ScreenshotMode';
+import LearnMode from './LearnMode';
 import PDFUploader from './PDFUploader';
 import WordDisplay from './WordDisplay';
 import BrailleCell from './BrailleCell';
@@ -89,7 +92,7 @@ function Header({ dark, onToggleDark }) {
 }
 
 export default function App() {
-  const [mode, setMode] = useState(null); // null (landing) | 'camera' | 'screenshot' | 'pdf'
+  const [mode, setMode] = useState(null); // null (landing) | 'camera' | 'screenshot' | 'pdf' | 'learn'
   const [uploaded, setUploaded] = useState(false);
   const [wordCount, setWordCount] = useState(0);
   const [word, setWord] = useState('');
@@ -284,6 +287,8 @@ export default function App() {
               setUploaded(true);
             }}
           />
+        ) : mode === 'learn' ? (
+          <LearnMode backendUrl={BACKEND_HTTP_URL} onBack={handleBackToMenu} />
         ) : (
           <div className="flex w-full flex-col items-center gap-6">
             <PDFUploader

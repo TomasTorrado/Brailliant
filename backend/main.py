@@ -32,13 +32,13 @@ from dotenv import load_dotenv
 # Running `uvicorn main:app` does NOT auto-load .env, so we do it explicitly.
 load_dotenv(Path(__file__).with_name(".env"))
 
-from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect  # noqa: E402
+from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
 from serial_comm import SerialLink  # noqa: E402
 from text_prep import extract_pdf_text  # noqa: E402
-from translator import translate_to_words  # noqa: E402
+from translator import BRAILLE_MAP, translate_to_words  # noqa: E402
 
 app = FastAPI()
 
@@ -175,6 +175,24 @@ async def back_step():
     """Rewind one letter. Called by the frontend's Back button/arrow key."""
     await broadcast_control("back")
     return {"ok": True}
+
+
+@app.post("/actuate/{letter}")
+async def actuate_letter(letter: str):
+    """Directly drive the solenoids for a single letter (Learn Mode).
+
+    Independent of the PDF reader state: it just looks the letter up in the
+    same UEB map the reader uses and sends its dot-pattern byte to the ESP32.
+    Called by the frontend's Learn Mode on every letter change so the physical
+    cell always matches the letter being learned (even when the on-screen cell
+    is hidden for self-testing).
+    """
+    key = letter.lower()
+    if key == " " or key not in BRAILLE_MAP:
+        raise HTTPException(status_code=400, detail=f"Not a letter a-z: {letter!r}")
+    pattern = BRAILLE_MAP[key]
+    serial_link.send_byte(pattern)
+    return {"letter": key, "pattern": pattern}
 
 
 @app.websocket("/ws")
