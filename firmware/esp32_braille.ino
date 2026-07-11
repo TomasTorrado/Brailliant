@@ -4,10 +4,12 @@
 //
 // - Listens on serial (USB) for incoming bytes from the Python backend.
 //   Each byte is a 6-bit dot pattern: bit0=dot1 ... bit5=dot6. We drive one
-//   GPIO pin per dot, firing the solenoid for any bit that's set.
-// - Listens for two push buttons ("next" and "back"). On a press, sends a
-//   single byte back over serial so the backend can step forward/backward
-//   one letter at a time: 'N' for next, 'B' for back.
+//   GPIO pin per dot. The solenoids are active-low: driving a pin LOW raises
+//   its dot, driving it HIGH pushes the dot back down. So a SET bit (raised
+//   dot) -> LOW, and a CLEAR bit (flat dot) -> HIGH.
+//
+// Next/back navigation is handled on the laptop (the frontend's left/right
+// arrow keys POST to the backend), so this firmware only drives solenoids.
 //
 
 #include <Arduino.h>
@@ -27,31 +29,24 @@ const long SERIAL_BAUD_RATE = 115200;
 // byte can overwrite it. Keep short so rapid characters don't blur together.
 const int SOLENOID_HOLD_MS = 300;
 
-// Simple debounce so one physical press doesn't register as multiple events.
-const int BUTTON_DEBOUNCE_MS = 250;
-
-// ---- State ----------------------------------------------------------------
-
-unsigned long lastNextPressMs = 0;
-unsigned long lastBackPressMs = 0;
-
 void setup() {
   Serial.begin(SERIAL_BAUD_RATE);
 
+  // Start with a blank (flat) cell: HIGH holds every dot down (active-low).
   for (int i = 0; i < 6; i++) {
     pinMode(DOT_PINS[i], OUTPUT);
-    digitalWrite(DOT_PINS[i], LOW);
+    digitalWrite(DOT_PINS[i], HIGH);
   }
 
-  pinMode(NEXT_BUTTON_PIN, INPUT_PULLUP);
-  pinMode(BACK_BUTTON_PIN, INPUT_PULLUP);
+  Serial.println("ready");
 }
 
 // Drives the 6 solenoid pins from a 6-bit dot pattern byte.
+// Solenoids are active-low: LOW raises the dot, HIGH pushes it back down.
 void setDots(uint8_t pattern) {
   for (int dot = 0; dot < 6; dot++) {
     bool raised = bitRead(pattern, dot);
-    digitalWrite(DOT_PINS[dot], raised ? HIGH : LOW);
+    digitalWrite(DOT_PINS[dot], raised ? LOW : HIGH);
   }
 }
 
@@ -61,27 +56,30 @@ void handleIncomingSerial() {
   if (Serial.available() > 0) {
     uint8_t pattern = Serial.read();
     setDots(pattern);
+
+    // Debug echo: report the received byte and which dots it raised so the
+    // host backend can log the ESP32's view of the data.
+    Serial.print("RX byte=");
+    Serial.print(pattern);
+    Serial.print(" raised dots:");
+    bool any = false;
+    for (int dot = 0; dot < 6; dot++) {
+      if (bitRead(pattern, dot)) {
+        Serial.print(' ');
+        Serial.print(dot + 1);
+        any = true;
+      }
+    }
+    if (!any) {
+      Serial.print(" (blank)");
+    }
+    Serial.println();
+
     delay(SOLENOID_HOLD_MS);
   }
 }
 
-// Checks both buttons and reports a press back to the backend as a single
-// byte: 'N' for next, 'B' for back.
-void handleButtons() {
-  unsigned long now = millis();
-
-  if (digitalRead(NEXT_BUTTON_PIN) == LOW && now - lastNextPressMs > BUTTON_DEBOUNCE_MS) {
-    lastNextPressMs = now;
-    Serial.write('N');
-  }
-
-  if (digitalRead(BACK_BUTTON_PIN) == LOW && now - lastBackPressMs > BUTTON_DEBOUNCE_MS) {
-    lastBackPressMs = now;
-    Serial.write('B');
-  }
-}
 
 void loop() {
   handleIncomingSerial();
-  handleButtons();
 }
