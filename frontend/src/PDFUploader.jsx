@@ -60,7 +60,15 @@ export default function PDFUploader({ backendUrl, onUploaded }) {
           setIsDragging(false);
           uploadFile(e.dataTransfer.files?.[0]);
         }}
-        onClick={() => fileInputRef.current?.click()}
+        onClick={() => {
+          if (window.electronAPI) {
+            window.electronAPI.openPDFDialog().then((file) => {
+              if (file) uploadFile(new File([file.data], file.name, { type: 'application/pdf' }));
+            });
+          } else {
+            fileInputRef.current?.click();
+          }
+        }}
         className={
           'flex h-64 w-full max-w-lg cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed transition-colors ' +
           (isDragging ? 'border-emerald-400 bg-neutral-900' : 'border-neutral-700 bg-neutral-950 hover:border-neutral-500')
