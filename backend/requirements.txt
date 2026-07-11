@@ -3,4 +3,5 @@ uvicorn[standard]
 pymupdf
 pyserial
 python-multipart
+python-dotenv
 num2words
