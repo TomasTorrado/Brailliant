@@ -20,35 +20,35 @@ const DOT_ORDER = [
   [2, 5], // row 3: dot 3, dot 6
 ];
 
-function Dot({ raised }) {
+function Dot({ raised, colorClass }) {
   return (
     <span
       className={
-        'block h-4 w-4 rounded-full border-2 transition-colors ' +
-        (raised ? 'border-emerald-400 bg-emerald-400' : 'border-neutral-600 bg-transparent')
+        'block h-5 w-5 rounded-full border-3 border-border transition-colors ' +
+        (raised ? `${colorClass} shadow-brutal-sm` : 'bg-dotEmpty')
       }
     />
   );
 }
 
-function SingleCell({ pattern, label, active }) {
+function SingleCell({ pattern, label, active, colorClass }) {
   return (
     <div className="flex flex-col items-center gap-2">
       <div
         className={
-          'grid grid-cols-2 gap-2 rounded-lg p-3 ' +
-          (active ? 'bg-neutral-800 ring-2 ring-emerald-400' : 'bg-neutral-900')
+          'grid grid-cols-2 gap-2 rounded-xl border-3 border-border bg-cardBg p-4 transition-all ' +
+          (active ? 'shadow-brutal' : 'shadow-brutal-sm opacity-90')
         }
       >
         {DOT_ORDER.map((row, rowIndex) => (
           <div key={rowIndex} className="contents">
             {row.map((bit) => (
-              <Dot key={bit} raised={Boolean(pattern & (1 << bit))} />
+              <Dot key={bit} raised={Boolean(pattern & (1 << bit))} colorClass={colorClass} />
             ))}
           </div>
         ))}
       </div>
-      {label && <span className="text-xs uppercase tracking-wide text-neutral-500">{label}</span>}
+      {label && <span className="text-xs font-bold uppercase tracking-wide text-subtext">{label}</span>}
     </div>
   );
 }
@@ -56,8 +56,8 @@ function SingleCell({ pattern, label, active }) {
 export default function BrailleCell({ currentPattern = 0, currentLabel, nextPattern = 0, nextLabel }) {
   return (
     <div className="flex items-center gap-6">
-      <SingleCell pattern={currentPattern} label={currentLabel || 'current'} active />
-      <SingleCell pattern={nextPattern} label={nextLabel || 'next'} />
+      <SingleCell pattern={currentPattern} label={currentLabel || 'current'} active colorClass="bg-primary" />
+      <SingleCell pattern={nextPattern} label={nextLabel || 'next'} colorClass="bg-teal" />
     </div>
   );
 }

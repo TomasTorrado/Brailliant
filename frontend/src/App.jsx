@@ -18,6 +18,52 @@ import BrailleCell from './BrailleCell';
 const BACKEND_HTTP_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
 const BACKEND_WS_URL = import.meta.env.VITE_BACKEND_WS_URL || 'ws://localhost:8000/ws';
 
+// Decorative brand mark: a mini 2x3 dot grid echoing the physical Braille
+// cell, rendered in a rounded neobrutalist chip.
+function LogoMark() {
+  return (
+    <div className="flex h-9 w-9 items-center justify-center rounded-xl border-3 border-border bg-primary shadow-brutal-sm">
+      <div className="grid grid-cols-2 gap-[3px]">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <span key={i} className="block h-1.5 w-1.5 rounded-full bg-text" />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ThemeToggle({ dark, onToggle }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={dark}
+      aria-label="Toggle dark mode"
+      onClick={onToggle}
+      className="relative h-8 w-14 shrink-0 overflow-hidden rounded-full border-3 border-border bg-toggleBg transition-colors duration-300"
+    >
+      <span
+        className={
+          'absolute top-1/2 h-5 w-5 -translate-y-1/2 rounded-full border-3 border-border bg-cardBg shadow-brutal-sm transition-transform duration-300 ' +
+          (dark ? 'translate-x-7' : 'translate-x-1')
+        }
+      />
+    </button>
+  );
+}
+
+function Header({ dark, onToggleDark }) {
+  return (
+    <header className="flex items-center justify-between border-b-3 border-border bg-bg px-6 py-4 transition-colors duration-300">
+      <div className="flex items-center gap-3">
+        <LogoMark />
+        <span className="text-xl font-extrabold tracking-tight text-text">Brailliant</span>
+      </div>
+      <ThemeToggle dark={dark} onToggle={onToggleDark} />
+    </header>
+  );
+}
+
 export default function App() {
   const [uploaded, setUploaded] = useState(false);
   const [wordCount, setWordCount] = useState(0);
@@ -25,7 +71,15 @@ export default function App() {
   const [patterns, setPatterns] = useState([]);
   const [activeIndex, setActiveIndex] = useState(-1);
   const [connected, setConnected] = useState(false);
+  const [dark, setDark] = useState(false);
   const wsRef = useRef(null);
+
+  // Purely presentational: reflects the toggle by swapping the `.dark` class
+  // that index.css uses to switch the design-token CSS variables. Doesn't
+  // touch any of the WebSocket/reader state above.
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', dark);
+  }, [dark]);
 
   useEffect(() => {
     if (!uploaded) return;
@@ -73,50 +127,54 @@ export default function App() {
     }
   }
 
-  if (!uploaded) {
-    return (
-      <PDFUploader
-        backendUrl={BACKEND_HTTP_URL}
-        onUploaded={(data) => {
-          setWordCount(data.word_count);
-          setUploaded(true);
-        }}
-      />
-    );
-  }
-
   const currentPattern = activeIndex >= 0 ? patterns[activeIndex] : 0;
   const nextPattern = activeIndex + 1 < patterns.length ? patterns[activeIndex + 1] : 0;
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center gap-10 p-8">
-      <p className="text-sm uppercase tracking-widest text-neutral-500">
-        {connected ? `Connected · ${wordCount} words` : 'Connecting…'}
-      </p>
+    <div className="flex min-h-screen flex-col bg-bg text-text transition-colors duration-300">
+      <Header dark={dark} onToggleDark={() => setDark((d) => !d)} />
 
-      <WordDisplay word={word} activeIndex={activeIndex} />
+      <main className="flex flex-1 flex-col items-center justify-center gap-10 p-8">
+        {!uploaded ? (
+          <PDFUploader
+            backendUrl={BACKEND_HTTP_URL}
+            onUploaded={(data) => {
+              setWordCount(data.word_count);
+              setUploaded(true);
+            }}
+          />
+        ) : (
+          <>
+            <p className="text-sm font-bold uppercase tracking-widest text-subtext">
+              {connected ? `Connected · ${wordCount} words` : 'Connecting…'}
+            </p>
 
-      <BrailleCell
-        currentPattern={currentPattern}
-        currentLabel={word[activeIndex] || ''}
-        nextPattern={nextPattern}
-        nextLabel={word[activeIndex + 1] || ''}
-      />
+            <WordDisplay word={word} activeIndex={activeIndex} />
 
-      <div className="flex gap-4">
-        <button
-          onClick={() => sendControl('repeat')}
-          className="rounded-lg bg-neutral-800 px-6 py-3 text-lg hover:bg-neutral-700"
-        >
-          Repeat
-        </button>
-        <button
-          onClick={() => sendControl('next')}
-          className="rounded-lg bg-emerald-600 px-6 py-3 text-lg hover:bg-emerald-500"
-        >
-          Next
-        </button>
-      </div>
+            <BrailleCell
+              currentPattern={currentPattern}
+              currentLabel={word[activeIndex] || ''}
+              nextPattern={nextPattern}
+              nextLabel={word[activeIndex + 1] || ''}
+            />
+
+            <div className="flex gap-4">
+              <button
+                onClick={() => sendControl('repeat')}
+                className="rounded-xl border-3 border-border bg-purple px-6 py-3 text-lg font-bold text-text shadow-brutal transition-all active:translate-x-1 active:translate-y-1 active:shadow-brutal-sm"
+              >
+                Repeat
+              </button>
+              <button
+                onClick={() => sendControl('next')}
+                className="rounded-xl border-3 border-border bg-primary px-6 py-3 text-lg font-bold text-text shadow-brutal transition-all active:translate-x-1 active:translate-y-1 active:shadow-brutal-sm"
+              >
+                Next
+              </button>
+            </div>
+          </>
+        )}
+      </main>
     </div>
   );
 }

@@ -6,15 +6,19 @@
 
 export default function WordDisplay({ word, activeIndex }) {
   if (!word) {
-    return <p className="text-4xl text-neutral-600">Waiting for text…</p>;
+    return <p className="text-4xl font-semibold text-subtext">Waiting for text…</p>;
   }
 
   return (
-    <p className="text-6xl font-semibold tracking-wide">
+    <p className="text-6xl font-extrabold tracking-wide text-text">
       {word.split('').map((letter, i) => (
         <span
           key={i}
-          className={i === activeIndex ? 'text-emerald-400 underline decoration-4 underline-offset-8' : 'text-neutral-100'}
+          className={
+            i === activeIndex
+              ? 'rounded-md bg-primary px-1 text-text underline decoration-4 underline-offset-8'
+              : 'text-text'
+          }
         >
           {letter}
         </span>

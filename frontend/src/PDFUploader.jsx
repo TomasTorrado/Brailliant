@@ -41,13 +41,27 @@ export default function PDFUploader({ backendUrl, onUploaded }) {
     }
   }
 
+  // Visual state for the drop zone: drag-active takes priority over the
+  // upload status, so the border/shadow react immediately to a file being
+  // dragged over regardless of what happened before.
+  const dropZoneState = isDragging ? 'drag' : status; // 'drag' | 'idle' | 'uploading' | 'error'
+
+  const dropZoneStyles = {
+    idle: 'border-border bg-cardBg shadow-brutal hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-brutal-lg',
+    drag: '-translate-x-0.5 -translate-y-0.5 border-teal bg-cardBg shadow-brutal-lg',
+    uploading: 'cursor-wait border-yellow bg-cardBg shadow-brutal-sm',
+    error: 'border-primary bg-cardBg shadow-brutal',
+  };
+
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center gap-6 p-8">
-      <h1 className="text-4xl font-semibold">Braille Reader</h1>
-      <p className="max-w-md text-center text-neutral-400">
-        Upload a PDF. It will be read aloud word by word and embossed live on the
-        physical Braille display.
-      </p>
+    <div className="flex w-full max-w-lg flex-col items-center gap-6 text-center">
+      <div>
+        <h1 className="text-4xl font-extrabold text-text">Braille Reader</h1>
+        <p className="mt-2 max-w-md text-subtext">
+          Upload a PDF. It will be read aloud word by word and embossed live on the
+          physical Braille display.
+        </p>
+      </div>
 
       <div
         onDragOver={(e) => {
@@ -70,8 +84,8 @@ export default function PDFUploader({ backendUrl, onUploaded }) {
           }
         }}
         className={
-          'flex h-64 w-full max-w-lg cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed transition-colors ' +
-          (isDragging ? 'border-emerald-400 bg-neutral-900' : 'border-neutral-700 bg-neutral-950 hover:border-neutral-500')
+          'flex h-64 w-full cursor-pointer flex-col items-center justify-center gap-3 rounded-xl border-3 p-6 transition-all ' +
+          dropZoneStyles[dropZoneState]
         }
       >
         <input
@@ -82,13 +96,19 @@ export default function PDFUploader({ backendUrl, onUploaded }) {
           onChange={(e) => uploadFile(e.target.files?.[0])}
         />
         {status === 'uploading' ? (
-          <p className="text-xl text-neutral-300">Uploading…</p>
+          <p className="text-xl font-bold text-text">Uploading…</p>
+        ) : isDragging ? (
+          <p className="text-xl font-bold text-text">Drop it here</p>
         ) : (
-          <p className="text-xl text-neutral-400">Drop a PDF here, or click to select one</p>
+          <p className="text-xl font-semibold text-subtext">Drop a PDF here, or click to select one</p>
         )}
       </div>
 
-      {status === 'error' && <p className="text-red-400">{errorMessage}</p>}
+      {status === 'error' && (
+        <p className="rounded-lg border-3 border-primary bg-cardBg px-4 py-2 font-semibold text-primary">
+          {errorMessage}
+        </p>
+      )}
     </div>
   );
 }
