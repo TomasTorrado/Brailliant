@@ -31,19 +31,23 @@ indirectly (see below).
 
 ## WebSocket (`/ws`)
 
-One JSON message per step, one of three shapes:
+One JSON message per step, one of four shapes:
 
 ```jsonc
 // A letter is active.
 {
   "type": "letter",
   "word": "hi",           // the whole current word, for highlighting/display
-  "patterns": [19, 10],   // every letter's byte in this word, for current+next preview
+  "patterns": [19, 10],   // every letter's byte in this word, index-aligned with word
   "index": 0              // which position in word/patterns is active right now
 }
 
 // Finished a word; blank cell before the next word's first letter.
 { "type": "word_end", "word": "hi" }
+
+// Reached the end of the document (stepping past the last word's
+// word_end) — "next" is a no-op from here until "back" undoes it.
+{ "type": "document_end" }
 
 // No document loaded yet.
 { "type": "empty" }
@@ -66,7 +70,8 @@ Two independent one-byte streams over the same USB connection:
 **Backend → ESP32** (one raw byte per step):
 - A letter step sends its packed dot-pattern byte (`0`–`63`, bit0=dot1 ...
   bit5=dot6).
-- A `word_end` or `empty` step sends `0` — no dots raised, blank cell.
+- A `word_end`, `document_end`, or `empty` step sends `0` — no dots
+  raised, blank cell / all pins down.
 
 **ESP32 → backend** (one raw byte per button press):
 - `'N'` — next button pressed.

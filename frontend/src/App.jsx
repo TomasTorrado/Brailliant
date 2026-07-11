@@ -49,6 +49,17 @@ function ThemeToggle({ dark, onToggle }) {
   );
 }
 
+function DocumentEndMessage() {
+  return (
+    <div className="flex flex-col items-center gap-2 rounded-xl border-3 border-border bg-cardBg p-8 text-center shadow-brutal">
+      <p className="text-4xl font-extrabold text-text">End of Document</p>
+      <p className="text-base font-semibold text-subtext">
+        You've reached the end. Press Back to review the last word.
+      </p>
+    </div>
+  );
+}
+
 function ProgressBar({ current, total, percent }) {
   return (
     <div className="w-full max-w-md">
@@ -87,6 +98,7 @@ export default function App() {
   const [connected, setConnected] = useState(false);
   const [dark, setDark] = useState(false);
   const [wordIndex, setWordIndex] = useState(0);
+  const [documentEnded, setDocumentEnded] = useState(false);
   const wsRef = useRef(null);
   const prevStepRef = useRef({ type: null, index: null });
 
@@ -113,6 +125,8 @@ export default function App() {
       const message = JSON.parse(event.data);
       const prev = prevStepRef.current;
 
+      setDocumentEnded(message.type === 'document_end');
+
       if (message.type === 'letter') {
         // Backend doesn't send a word position, but "word_end -> letter" only
         // ever happens by stepping into the next word, so we can derive it.
@@ -130,6 +144,10 @@ export default function App() {
         setPatterns([]);
         setActiveIndex(-1);
         setWordIndex(0);
+      } else if (message.type === 'document_end') {
+        setWord('');
+        setPatterns([]);
+        setActiveIndex(-1);
       }
 
       prevStepRef.current = { type: message.type, index: message.index ?? null };
@@ -181,6 +199,7 @@ export default function App() {
     setWordIndex(0);
     setWordCount(0);
     setConnected(false);
+    setDocumentEnded(false);
   }
 
   // Return to the landing page and clear any in-progress reading session.
@@ -208,9 +227,14 @@ export default function App() {
 
             <ProgressBar current={currentWordNumber} total={wordCount} percent={progressPercent} />
 
-            <WordDisplay word={word} activeIndex={activeIndex} />
-
-            <BrailleCell currentPattern={currentPattern} currentLabel={word[activeIndex] || ''} />
+            {documentEnded ? (
+              <DocumentEndMessage />
+            ) : (
+              <>
+                <WordDisplay word={word} activeIndex={activeIndex} />
+                <BrailleCell currentPattern={currentPattern} currentLabel={word[activeIndex] || ''} />
+              </>
+            )}
 
             <div className="flex gap-4">
               <button

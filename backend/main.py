@@ -10,21 +10,21 @@
 #   2. Client opens a WebSocket at /ws. Since the hardware is a single
 #      6-pin Braille cell, only one letter can ever be displayed at a time
 #      — so reading is fully manual, letter by letter: every "next"/"back"
-#      command (from the web UI or the ESP32's physical buttons) advances
-#      or rewinds exactly one step. Finishing a word's last letter takes
-#      one extra "next" into a distinct word-end (blank cell) step before
-#      the next word's first letter appears; "back" mirrors this exactly.
-#   3. Next/back navigation comes from the web UI (its left/right arrow keys
-#      POST to /next and /back). The ESP32 only drives solenoids; it echoes
-#      each byte it receives back over serial, and a background task relays
-#      that to our console for debugging.
+#      command (from the web UI's buttons/arrow keys) advances or rewinds
+#      exactly one step. Finishing a word's last letter takes one extra
+#      "next" into a distinct word-end (blank cell) step before the next
+#      word's first letter appears; "back" mirrors this exactly. Stepping
+#      past the very last word's word-end step lands on a document-end
+#      step (all pins down) instead of wrapping back to the start; "next"
+#      is then a no-op until "back" undoes it.
+#   3. Next/back navigation comes only from the web UI (its buttons/arrow
+#      keys POST to /next and /back) — the ESP32 just drives solenoids and
+#      echoes every byte it receives back over serial, which a background
+#      task relays to our console for debugging.
 
 import asyncio
 from pathlib import Path
 
-from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 from dotenv import load_dotenv
 
 # Load backend/.env before importing serial_comm, which reads
@@ -34,6 +34,7 @@ load_dotenv(Path(__file__).with_name(".env"))
 
 from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+from pydantic import BaseModel  # noqa: E402
 
 from serial_comm import SerialLink  # noqa: E402
 from text_prep import extract_pdf_text  # noqa: E402
@@ -71,17 +72,21 @@ class ReaderState:
         self.words = []  # list of {"word": str, "patterns": [int, ...]}
         self.word_index = 0
         self.letter_index = 0
+        self.at_end = False
 
     def load(self, text):
         self.words = translate_to_words(text)
         self.word_index = 0
         self.letter_index = 0
+        self.at_end = False
 
     def current_step(self):
         if not self.words:
             return {"type": "empty"}
+        if self.at_end:
+            return {"type": "document_end"}
 
-        entry = self.words[self.word_index % len(self.words)]
+        entry = self.words[self.word_index]
         word = entry["word"]
 
         if self.letter_index >= len(word):
@@ -97,18 +102,27 @@ class ReaderState:
 
     def advance(self):
         """Move forward exactly one letter (or into/out of the word-end step)."""
-        if not self.words:
+        if not self.words or self.at_end:
             return
-        word_len = len(self.words[self.word_index % len(self.words)]["word"])
+        word_len = len(self.words[self.word_index]["word"])
         if self.letter_index < word_len:
             self.letter_index += 1
+        elif self.word_index == len(self.words) - 1:
+            # Stepping past the last word's word-end step ends the document,
+            # rather than wrapping back to the first word. word_index/
+            # letter_index are left exactly as-is (still the last word's
+            # word-end step) so back() can just clear at_end to undo this.
+            self.at_end = True
         else:
-            self.word_index = (self.word_index + 1) % len(self.words)
+            self.word_index += 1
             self.letter_index = 0
 
     def back(self):
         """Move backward exactly one letter (mirrors advance())."""
         if not self.words:
+            return
+        if self.at_end:
+            self.at_end = False
             return
         if self.letter_index > 0:
             self.letter_index -= 1
@@ -151,14 +165,14 @@ async def upload_text(payload: TextPayload):
 
 @app.post("/next")
 async def next_step():
-    """Advance one letter. Called by the frontend or the ESP32 'next' button."""
+    """Advance one letter. Called by the frontend's Next button/arrow key."""
     await broadcast_control("next")
     return {"ok": True}
 
 
 @app.post("/back")
 async def back_step():
-    """Rewind one letter. Called by the frontend or the ESP32 'back' button."""
+    """Rewind one letter. Called by the frontend's Back button/arrow key."""
     await broadcast_control("back")
     return {"ok": True}
 
@@ -191,6 +205,11 @@ async def send_current_step(websocket):
     if step["type"] == "empty":
         serial_link.send_byte(0)
         await websocket.send_json({"type": "empty"})
+        return
+
+    if step["type"] == "document_end":
+        serial_link.send_byte(0)  # all pins down
+        await websocket.send_json({"type": "document_end"})
         return
 
     if step["type"] == "word_end":
