@@ -23,11 +23,38 @@ time.
 | `/upload` | POST | multipart PDF file → `{"word_count": int}` | Extract + clean + translate a PDF, reset reading position to the start. |
 | `/next` | POST | — → `{"ok": true}` | Broadcast a `next` command to every connected WebSocket. |
 | `/back` | POST | — → `{"ok": true}` | Broadcast a `back` command to every connected WebSocket. |
+| `/guide/{direction}` | POST | — → `{"direction", "pattern"}` | Camera Movement Standard: drive the cell to point the way to move the camera. Stateless (like `/actuate`), independent of `ReaderState`. |
 
 `/next` and `/back` don't return the new step directly — they just signal
 the `/ws` loop, which then pushes the updated step to every connected
 client. The frontend's buttons/arrow keys call these; so does the ESP32
 indirectly (see below).
+
+### Camera Movement Standard (`/guide/{direction}`)
+
+Camera Mode runs a live in-browser detection loop (a cheap gradient
+centre-of-mass over a downscaled frame — no ML model, works offline in the
+Electron build). It turns the detected object's offset from frame-centre
+into one of eight directions — `up`, `down`, `left`, `right`, `up-left`,
+`up-right`, `down-left`, `down-right` — or `centered`, and POSTs it here
+only when it changes. The backend maps it to a 6-dot pattern that *points
+the way to move the camera* (arrow points at the object): e.g. object high
+and left → raise the top-left dot; `centered` raises all six as a distinct
+"locked on" buzz. Steady centring auto-fires a capture, so a blind user can
+aim by feel and let it read once framed. Same one-byte serial path as a
+letter — the ESP32 needs no camera knowledge.
+
+| Direction | Raised dots | Byte |
+|-----------|-------------|------|
+| `up` | 1,4 | 9 |
+| `down` | 3,6 | 36 |
+| `left` | 1,2,3 | 7 |
+| `right` | 4,5,6 | 56 |
+| `up-left` | 1 | 1 |
+| `up-right` | 4 | 8 |
+| `down-left` | 3 | 4 |
+| `down-right` | 6 | 32 |
+| `centered` | 1–6 (all) | 63 |
 
 ## WebSocket (`/ws`)
 

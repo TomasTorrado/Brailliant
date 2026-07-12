@@ -19,9 +19,9 @@ function ModeCard({ hotkey, title, description, accent, icon, onSelect }) {
       type="button"
       onClick={onSelect}
       className={
-        'group flex w-full max-w-sm flex-col items-center gap-4 rounded-xl border-3 border-border ' +
+        'group flex w-full flex-1 flex-col items-center gap-4 rounded-xl border-3 border-border ' +
         accent +
-        ' px-8 py-10 text-center shadow-brutal transition-all ' +
+        ' px-6 py-10 text-center shadow-brutal transition-all ' +
         'hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-brutal-lg ' +
         'active:translate-x-1 active:translate-y-1 active:shadow-brutal-sm'
       }
@@ -97,7 +97,7 @@ export default function LandingPage({ onSelectMode }) {
   }, [onSelectMode]);
 
   return (
-    <div className="flex w-full max-w-4xl flex-col items-center gap-10 text-center">
+    <div className="flex w-full max-w-6xl flex-col items-center gap-10 text-center">
       <div>
         <h1 className="text-5xl font-extrabold text-text">Brailliant</h1>
         <p className="mt-3 max-w-xl text-lg text-subtext">
@@ -106,7 +106,7 @@ export default function LandingPage({ onSelectMode }) {
         </p>
       </div>
 
-      <div className="flex w-full flex-col items-stretch justify-center gap-8 sm:flex-row sm:flex-wrap">
+      <div className="flex w-full flex-col items-stretch justify-center gap-6 sm:flex-row sm:flex-nowrap">
         <ModeCard
           hotkey="M"
           title="Camera Mode"

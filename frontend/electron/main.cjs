@@ -4,14 +4,15 @@
 // invoked by the renderer via the preload contextBridge — the PDF
 // file-picker dialog, OCR via macOS's Vision framework (a compiled Swift CLI
 // helper, since the renderer can't call native macOS APIs directly, see
-// electron/native/ocr_helper.swift), and native screen capture via macOS's
-// screencapture CLI for Screenshot Mode.
+// electron/native/ocr_helper.swift), native screen capture via macOS's
+// screencapture CLI for Screenshot Mode, and a persistent Vision detector
+// process for the live camera-guidance loop.
 //
 // In development it loads the Vite dev server (so HMR keeps working); once
 // packaged, it loads the built static files from dist/.
 
 const { app, BrowserWindow, ipcMain, dialog, systemPreferences, shell, desktopCapturer } = require('electron');
-const { execFile } = require('child_process');
+const { execFile, spawn } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
@@ -23,6 +24,50 @@ const OCR_HELPER_PATH = path.join(__dirname, 'native', 'ocr_helper');
 // Tracked so list-capturable-windows can exclude this app's own window from
 // the picker (capturing Brailliant's own UI, mid-picker, would be useless).
 let mainWindow = null;
+
+// ---- Persistent Vision detector -----------------------------------------
+//
+// The live camera-guidance loop needs low-latency text detection many times a
+// second. Spawning the helper (and cold-starting Vision) per frame was the
+// reactivity bottleneck, so we keep ONE warm `ocr_helper --serve` process and
+// stream frames to it: write a 4-byte big-endian length + JPEG bytes to its
+// stdin, read back one JSON line of boxes per frame from its stdout. Requests
+// are answered FIFO (the helper processes frames in order), and the renderer
+// awaits each detect before sending the next, so at most one is in flight.
+let detector = null; // { child, pending: resolver[], buffer: string }
+
+function ensureDetector() {
+  if (detector) return detector;
+
+  const child = spawn(OCR_HELPER_PATH, ['--serve']);
+  const state = { child, pending: [], buffer: '' };
+
+  child.stdout.on('data', (chunk) => {
+    state.buffer += chunk.toString();
+    let nl;
+    while ((nl = state.buffer.indexOf('\n')) >= 0) {
+      const line = state.buffer.slice(0, nl);
+      state.buffer = state.buffer.slice(nl + 1);
+      const resolve = state.pending.shift();
+      if (resolve) {
+        try {
+          resolve(JSON.parse(line || '[]'));
+        } catch {
+          resolve([]);
+        }
+      }
+    }
+  });
+  child.stderr.on('data', (d) => console.error('[ocr --serve]', d.toString().trim()));
+  child.on('exit', () => {
+    // Fail any in-flight requests and drop the handle so the next call respawns.
+    state.pending.forEach((resolve) => resolve([]));
+    if (detector === state) detector = null;
+  });
+
+  detector = state;
+  return state;
+}
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -63,15 +108,18 @@ ipcMain.handle('open-pdf-dialog', async () => {
   };
 });
 
-// Runs OCR on an image via macOS's Vision framework. The renderer can't call
-// native APIs directly, so this writes the image to a temp file, shells out
-// to the compiled ocr_helper binary, and parses the JSON array of
-// {text, top} lines it prints (top = that line's top edge as a fraction of
-// image height, 0 = top of image).
+// Runs accurate OCR on an image via macOS's Vision framework (ocr_helper
+// --json — see ocr_helper.swift for the other two modes: plain-text capture
+// and the --serve streaming detector detect-text uses below). The renderer
+// can't call native APIs directly, so this writes the image to a temp file,
+// shells out to the compiled binary, and parses the JSON array of
+// {text, confidence, x, y, w, h} entries it prints (y = that line's top edge
+// as a fraction of image height, 0 = top of image, already flipped to a
+// top-left origin).
 //
-// `excludeTopFraction` (optional) drops every line whose top falls above
-// that fraction before joining the rest into plain text. Screenshot Mode
-// passes this to cut out a maximized browser's chrome (tabs/address
+// `excludeTopFraction` (optional) drops every line whose y falls above that
+// fraction before joining the rest into plain text. Screenshot Mode passes
+// this to cut out a browser window's own chrome (tabs/address
 // bar/bookmarks); Camera Mode does NOT pass it — a real-world photo has no
 // "browser chrome" concept, and blindly stripping its top edge would just
 // eat real content.
@@ -83,7 +131,7 @@ ipcMain.handle('recognize-text', async (event, imageDataUrl, options = {}) => {
 
   try {
     const stdout = await new Promise((resolve, reject) => {
-      execFile(OCR_HELPER_PATH, [tempPath], (error, stdout, stderr) => {
+      execFile(OCR_HELPER_PATH, ['--json', tempPath], (error, stdout, stderr) => {
         if (error) {
           reject(new Error(stderr || error.message));
           return;
@@ -94,12 +142,31 @@ ipcMain.handle('recognize-text', async (event, imageDataUrl, options = {}) => {
 
     const lines = JSON.parse(stdout);
     return lines
-      .filter((line) => line.top >= excludeTopFraction)
+      .filter((line) => line.y >= excludeTopFraction)
       .map((line) => line.text)
       .join('\n');
   } finally {
     fs.unlink(tempPath, () => {});
   }
+});
+
+// Fast Vision pass for the live camera-guidance loop: returns an array of
+// { text, confidence, x, y, w, h } (box in top-left-origin normalized coords)
+// so the renderer can locate/track the text and gauge legibility several times
+// a second. Streamed to the warm --serve process (no per-frame spawn or temp
+// file) for low latency; the final capture still uses accurate recognize-text.
+ipcMain.handle('detect-text', async (event, imageDataUrl) => {
+  const base64 = imageDataUrl.replace(/^data:image\/\w+;base64,/, '');
+  const frame = Buffer.from(base64, 'base64');
+  const det = ensureDetector();
+
+  return new Promise((resolve) => {
+    det.pending.push(resolve);
+    const header = Buffer.alloc(4);
+    header.writeUInt32BE(frame.length, 0);
+    det.child.stdin.write(header);
+    det.child.stdin.write(frame);
+  });
 });
 
 // Lists currently open windows (name + thumbnail) so Screenshot Mode can
@@ -221,4 +288,12 @@ app.on('window-all-closed', () => {
 
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();
+});
+
+// Tear down the warm detector process when the app exits.
+app.on('will-quit', () => {
+  if (detector) {
+    detector.child.kill();
+    detector = null;
+  }
 });
