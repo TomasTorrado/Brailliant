@@ -9,11 +9,21 @@
 // back whatever it prints to stdout.
 //
 // Usage: ocr_helper <path-to-image>
-// Prints recognized text to stdout, one line per detected text line.
+// Prints a JSON array of {"text": ..., "top": ...} to stdout, one entry per
+// detected text line, where `top` is that line's top edge as a fraction of
+// the image's height (0 = top of image, 1 = bottom). main.cjs uses `top` to
+// drop lines that fall inside a maximized browser's chrome (tabs/address
+// bar/bookmarks bar) for Screenshot Mode, without us having to guess at a
+// fixed crop in pixels.
 
 import AppKit
 import Foundation
 import Vision
+
+struct OcrLine: Codable {
+    let text: String
+    let top: Double
+}
 
 guard CommandLine.arguments.count > 1 else {
     FileHandle.standardError.write("Usage: ocr_helper <image_path>\n".data(using: .utf8)!)
@@ -29,7 +39,7 @@ guard let image = NSImage(contentsOfFile: imagePath),
 }
 
 let semaphore = DispatchSemaphore(value: 0)
-var resultText = ""
+var resultLines: [OcrLine] = []
 var requestError: Error?
 
 let request = VNRecognizeTextRequest { request, error in
@@ -39,7 +49,17 @@ let request = VNRecognizeTextRequest { request, error in
         return
     }
     guard let observations = request.results as? [VNRecognizedTextObservation] else { return }
-    resultText = observations.compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
+    // Vision's boundingBox is normalized to [0,1] with the origin at the
+    // BOTTOM-left of the image (Core Graphics convention), not the top-left
+    // like screen/CSS coordinates. Flip it here so `top` means what it says
+    // — distance from the top of the image — and callers don't also need
+    // to know about Vision's coordinate convention.
+    resultLines = observations.compactMap { observation in
+        guard let text = observation.topCandidates(1).first?.string else { return nil }
+        let box = observation.boundingBox
+        let top = 1.0 - (box.origin.y + box.size.height)
+        return OcrLine(text: text, top: Double(top))
+    }
 }
 request.recognitionLevel = .accurate
 request.usesLanguageCorrection = true
@@ -59,4 +79,9 @@ if let requestError = requestError {
     exit(1)
 }
 
-print(resultText)
+let encoder = JSONEncoder()
+guard let data = try? encoder.encode(resultLines), let json = String(data: data, encoding: .utf8) else {
+    FileHandle.standardError.write("Failed to encode OCR results\n".data(using: .utf8)!)
+    exit(1)
+}
+print(json)
