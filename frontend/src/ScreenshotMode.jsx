@@ -1,53 +1,64 @@
 // ScreenshotMode.jsx
 //
-// Screen-capture pipeline, mirroring CameraMode's capture -> OCR -> review ->
-// send-to-reader flow but sourced from the screen instead of the camera:
-//   1. A small draggable badge sits on top of whatever page/app you're
-//      reading, showing the capture hotkey. It carries no live preview —
-//      positioning it is just about moving it out of the way of the content
-//      you're about to capture.
-//   2. Pressing the capture key calls getDisplayMedia(), which pops the
-//      browser/OS's own screen/window/tab picker (this permission prompt
-//      can't be skipped or pre-empted — it's a browser security boundary).
-//   3. We grab exactly one frame from the resulting stream onto a hidden
-//      canvas, then immediately stop the stream so the "sharing" indicator
-//      goes away right after the capture.
-//   4. Run Tesseract.js OCR on that frame directly. Unlike CameraMode's
-//      photos of real-world printed text, a screenshot is already
-//      high-contrast digital text with no lighting/glare to fight, so we
-//      skip the OpenCV preprocessing pass entirely, and leave Tesseract's
-//      default (AUTO) page segmentation alone instead of forcing
-//      SINGLE_BLOCK — a full-screen capture is a real page layout (nav,
-//      sidebars, multiple columns), not one cropped-to-subject photo.
-//   5. Same debug-preview-then-explicit-send flow as CameraMode: nothing
-//      reaches /upload-text until you review the OCR text and click
-//      "Use This Text".
+// Screen-capture pipeline, mirroring CameraMode's current (Vision-based)
+// capture -> OCR -> reader flow exactly, but sourced from a chosen window
+// instead of the camera:
+//   1. Pressing the capture key (or button) calls window.electronAPI
+//      .listCapturableWindows() and shows an in-app picker (WindowPicker)
+//      with a thumbnail + name for every open window (Brailliant's own
+//      window excluded).
+//   2. Clicking a window calls window.electronAPI.captureScreenshot({
+//      windowId }), which shells out to macOS's `screencapture -l
+//      <windowid>` to grab just that window's contents non-interactively —
+//      no region-dragging, no full-screen capture of things you didn't ask
+//      for.
+//   3. Run OCR via macOS's Vision framework (window.electronAPI.recognizeText
+//      — the same native bridge CameraMode uses) directly on the resulting
+//      PNG. We pass excludeTopFraction so lines Vision finds near the top of
+//      the window (its own tabs/address bar/bookmarks bar) get dropped
+//      before the text ever reaches the reader — Camera Mode does NOT pass
+//      this, since a real-world photo has no "browser chrome" to exclude.
+//   4. POST that text to /upload-text and hand control back via onCaptured —
+//      same shape as CameraMode/PDFUploader, so App.jsx swaps into the same
+//      reading view regardless of source. No debug/preview step, matching
+//      CameraMode's current flow.
+//
+// This only works inside the Electron desktop app on macOS — screencapture
+// and the Vision bridge are both macOS-only, and there's no browser-only
+// fallback.
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
+import WindowPicker from './WindowPicker';
+
+// Fraction of the captured window's height (from its own top edge) to drop
+// before OCR text reaches the reader — meant to cover a browser window's own
+// traffic lights/tabs/address bar/bookmarks bar. Re-tuned higher than the
+// ~0.12 that worked for whole-screen captures: a single window's chrome
+// takes up a noticeably bigger share of the frame once there's no
+// surrounding desktop/menu-bar padding diluting it. This value came from
+// real window geometry (a Chrome toolbar layer measuring ~158px against a
+// ~949px total window height, macOS's CGWindowListCopyWindowInfo) rather
+// than a blind guess, but I could not pixel-test an actual `-l` capture in
+// this environment (screencapture -l failed outside the app's own granted
+// permission context) — treat this as a starting point to verify live.
+const SCREENSHOT_CHROME_EXCLUDE_TOP_FRACTION = 0.17;
 
 export default function ScreenshotMode({ onBack, backendUrl, onCaptured }) {
-  const canvasRef = useRef(null);
-  const workerRef = useRef(null);
-  const badgeRef = useRef(null);
-  const dragStateRef = useRef(null);
-
-  // idle | requesting | capturing | processing | error
+  // idle | listing | picking | capturing | processing
   const [status, setStatus] = useState('idle');
   const [errorMessage, setErrorMessage] = useState('');
-  const [debugPreview, setDebugPreview] = useState(null); // { raw, text } | null
-  const [badgePos, setBadgePos] = useState({ x: 24, y: 24 });
+  const [permissionDenied, setPermissionDenied] = useState(false);
+  const [windows, setWindows] = useState([]);
 
-  const supported = !!navigator.mediaDevices?.getDisplayMedia;
+  const supported = !!(
+    window.electronAPI?.listCapturableWindows &&
+    window.electronAPI?.captureScreenshot &&
+    window.electronAPI?.recognizeText
+  );
 
-  useEffect(() => {
-    return () => {
-      workerRef.current?.terminate();
-      workerRef.current = null;
-    };
-  }, []);
-
-  // C (or Space) triggers a capture; B returns to the menu — mirroring
-  // CameraMode's shortcuts. B works in any state so you can always back out.
+  // C (or Space) triggers the window picker; B returns to the menu —
+  // mirroring CameraMode's shortcuts. B works in any state so you can always
+  // back out.
   useEffect(() => {
     function handleKeyDown(event) {
       if (event.key.toLowerCase() === 'b') {
@@ -55,10 +66,10 @@ export default function ScreenshotMode({ onBack, backendUrl, onCaptured }) {
         onBack();
         return;
       }
-      if (status === 'requesting' || status === 'processing') return;
+      if (status !== 'idle') return;
       if (event.key === ' ' || event.key.toLowerCase() === 'c') {
         event.preventDefault();
-        capture();
+        openPicker();
       }
     }
     window.addEventListener('keydown', handleKeyDown);
@@ -66,111 +77,90 @@ export default function ScreenshotMode({ onBack, backendUrl, onCaptured }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status]);
 
-  // Plain pointer-drag for the badge: no library needed for a single
-  // draggable element. Position is clamped to stay fully on-screen.
-  function handleBadgePointerDown(event) {
-    const rect = badgeRef.current.getBoundingClientRect();
-    dragStateRef.current = {
-      offsetX: event.clientX - rect.left,
-      offsetY: event.clientY - rect.top,
-    };
-    window.addEventListener('pointermove', handlePointerMove);
-    window.addEventListener('pointerup', handlePointerUp);
-  }
+  async function openPicker() {
+    if (!supported || status !== 'idle') return;
 
-  function handlePointerMove(event) {
-    const drag = dragStateRef.current;
-    if (!drag) return;
-    const rect = badgeRef.current.getBoundingClientRect();
-    const maxX = window.innerWidth - rect.width;
-    const maxY = window.innerHeight - rect.height;
-    setBadgePos({
-      x: Math.min(Math.max(event.clientX - drag.offsetX, 0), Math.max(maxX, 0)),
-      y: Math.min(Math.max(event.clientY - drag.offsetY, 0), Math.max(maxY, 0)),
-    });
-  }
-
-  function handlePointerUp() {
-    dragStateRef.current = null;
-    window.removeEventListener('pointermove', handlePointerMove);
-    window.removeEventListener('pointerup', handlePointerUp);
-  }
-
-  async function capture() {
-    if (!supported) return;
-
-    setStatus('requesting');
+    setStatus('listing');
     setErrorMessage('');
+    setPermissionDenied(false);
 
-    let stream;
+    let result;
     try {
-      stream = await navigator.mediaDevices.getDisplayMedia({
-        video: { displaySurface: 'monitor' },
-        audio: false,
-      });
+      result = await window.electronAPI.listCapturableWindows();
     } catch (err) {
-      // Most commonly the user dismissed the OS/browser picker — not a real
-      // error, just no capture this time.
       setStatus('idle');
-      if (err?.name !== 'NotAllowedError') {
-        setErrorMessage(err?.message || 'Could not start screen capture.');
-      }
+      setErrorMessage(err?.message || 'Could not list open windows.');
       return;
     }
 
-    setStatus('capturing');
-    try {
-      const video = document.createElement('video');
-      video.srcObject = stream;
-      await new Promise((resolve, reject) => {
-        video.onloadedmetadata = resolve;
-        video.onerror = reject;
-      });
-      await video.play();
-
-      const canvas = canvasRef.current;
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
-    } finally {
-      // Release the share as soon as we have our one frame, so the browser's
-      // "sharing your screen" indicator doesn't linger.
-      stream.getTracks().forEach((t) => t.stop());
+    if (result.error) {
+      setStatus('idle');
+      setPermissionDenied(result.error === 'permission-denied');
+      setErrorMessage(
+        result.error === 'permission-denied'
+          ? 'Brailliant needs Screen Recording permission to list and capture windows.'
+          : result.error === 'unsupported-platform'
+            ? 'Screenshot capture is only available in the desktop app on macOS.'
+            : 'Could not list open windows.',
+      );
+      return;
     }
 
-    const canvas = canvasRef.current;
-    const rawPreview = canvas.toDataURL('image/png');
-    setDebugPreview({ raw: rawPreview, text: null });
+    setWindows(result.windows);
+    setStatus('picking');
+  }
+
+  function cancelPicker() {
+    setStatus('idle');
+  }
+
+  async function captureWindow(windowId) {
+    setStatus('capturing');
+
+    let result;
+    try {
+      result = await window.electronAPI.captureScreenshot({ windowId });
+    } catch (err) {
+      setStatus('idle');
+      setErrorMessage(err?.message || 'Could not capture that window.');
+      return;
+    }
+
+    if (result.canceled) {
+      setStatus('idle');
+      return;
+    }
+
+    if (result.error) {
+      setStatus('idle');
+      setPermissionDenied(result.error === 'permission-denied');
+      setErrorMessage(
+        result.error === 'permission-denied'
+          ? 'Brailliant needs Screen Recording permission to capture that window.'
+          : result.error === 'unsupported-platform'
+            ? 'Screenshot capture is only available in the desktop app on macOS.'
+            : result.message || 'Could not capture that window.',
+      );
+      return;
+    }
 
     setStatus('processing');
     try {
-      if (!workerRef.current) {
-        const { createWorker, OEM } = await import('tesseract.js');
-        workerRef.current = await createWorker('eng', OEM.LSTM_ONLY);
-      }
-      const {
-        data: { text },
-      } = await workerRef.current.recognize(canvas);
-      setDebugPreview({ raw: rawPreview, text });
-      setStatus('idle');
-    } catch (err) {
-      setStatus('idle');
-      setErrorMessage(err?.message || 'Could not read text from that screenshot.');
-    }
-  }
+      const text = await window.electronAPI.recognizeText(result.dataUrl, {
+        excludeTopFraction: SCREENSHOT_CHROME_EXCLUDE_TOP_FRACTION,
+      });
 
-  async function sendToReader() {
-    try {
       const response = await fetch(`${backendUrl}/upload-text`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: debugPreview.text }),
+        body: JSON.stringify({ text }),
       });
       if (!response.ok) throw new Error(`Upload failed (${response.status})`);
       const data = await response.json();
       onCaptured(data);
     } catch (err) {
-      setErrorMessage(err?.message || 'Could not send that text to the reader.');
+      setStatus('idle');
+      setErrorMessage(err?.message || 'Could not read text from that window.');
     }
   }
 
@@ -179,59 +169,53 @@ export default function ScreenshotMode({ onBack, backendUrl, onCaptured }) {
       <div>
         <h1 className="text-4xl font-extrabold text-text">Screenshot Mode</h1>
         <p className="mt-2 max-w-md text-subtext">
-          Drag the badge out of the way, then press{' '}
-          <kbd className="rounded-md border-3 border-border bg-cardBg px-2 py-0.5 text-sm font-extrabold">C</kbd> to
-          capture your screen. It will be read word by word and embossed live on the physical Braille display.
+          Press <kbd className="rounded-md border-3 border-border bg-cardBg px-2 py-0.5 text-sm font-extrabold">C</kbd>{' '}
+          to pick a window (e.g. your browser) to capture — the text will be read word by word and embossed live on
+          the physical Braille display.
         </p>
       </div>
 
-      {!supported ? (
+      {!supported && (
         <div className="flex w-full flex-col items-center gap-2 rounded-xl border-3 border-border bg-cardBg p-8 shadow-brutal">
           <p className="text-xl font-bold text-text">Screen capture unavailable</p>
           <p className="text-sm font-semibold text-subtext">
-            This browser doesn't support screen capture. Try Chrome or Edge on desktop.
+            This only works in the Brailliant desktop app on macOS.
           </p>
-        </div>
-      ) : (
-        <div
-          ref={badgeRef}
-          onPointerDown={handleBadgePointerDown}
-          style={{ left: badgePos.x, top: badgePos.y }}
-          className="fixed z-50 flex cursor-grab select-none items-center gap-3 rounded-xl border-3 border-border bg-purple px-4 py-3 shadow-brutal active:cursor-grabbing"
-        >
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border-3 border-border bg-cardBg">
-            <div className="grid grid-cols-2 gap-[2px]">
-              {Array.from({ length: 6 }).map((_, i) => (
-                <span key={i} className="block h-1 w-1 rounded-full bg-text" />
-              ))}
-            </div>
-          </div>
-          <div className="text-left">
-            <p className="text-sm font-extrabold uppercase tracking-widest text-text">
-              {status === 'requesting'
-                ? 'Choose a screen…'
-                : status === 'capturing'
-                  ? 'Capturing…'
-                  : status === 'processing'
-                    ? 'Reading text…'
-                    : 'Ready'}
-            </p>
-            <p className="text-xs font-semibold text-text/80">
-              Press <kbd className="rounded border-2 border-border bg-cardBg px-1">C</kbd> to capture
-            </p>
-          </div>
         </div>
       )}
 
-      {errorMessage && <p className="text-sm font-semibold text-subtext">{errorMessage}</p>}
+      <div className="flex w-full flex-col items-center gap-2 rounded-xl border-3 border-border bg-cardBg p-4 shadow-brutal">
+        <p className="text-sm font-extrabold uppercase tracking-widest text-text">
+          {status === 'listing'
+            ? 'Finding windows…'
+            : status === 'picking'
+              ? 'Choose a window…'
+              : status === 'capturing'
+                ? 'Capturing…'
+                : status === 'processing'
+                  ? 'Reading text…'
+                  : 'Ready'}
+        </p>
+      </div>
 
-      {/* Hidden capture buffer — never shown, just used to grab a single frame. */}
-      <canvas ref={canvasRef} className="hidden" />
+      {errorMessage && (
+        <div className="flex flex-col items-center gap-2">
+          <p className="text-sm font-semibold text-subtext">{errorMessage}</p>
+          {permissionDenied && (
+            <button
+              onClick={() => window.electronAPI.openScreenRecordingSettings()}
+              className="rounded-xl border-3 border-border bg-cardBg px-4 py-2 text-sm font-bold text-text shadow-brutal transition-all active:translate-x-1 active:translate-y-1 active:shadow-brutal-sm"
+            >
+              Open Screen Recording Settings
+            </button>
+          )}
+        </div>
+      )}
 
       <div className="flex gap-4">
         <button
-          onClick={capture}
-          disabled={!supported || status === 'requesting' || status === 'processing'}
+          onClick={openPicker}
+          disabled={!supported || status !== 'idle'}
           className="inline-flex items-center gap-2 rounded-xl border-3 border-border bg-primary px-6 py-3 text-lg font-bold text-text shadow-brutal transition-all active:translate-x-1 active:translate-y-1 active:shadow-brutal-sm disabled:cursor-not-allowed disabled:opacity-50"
         >
           Capture Screenshot
@@ -247,44 +231,7 @@ export default function ScreenshotMode({ onBack, backendUrl, onCaptured }) {
         </button>
       </div>
 
-      {debugPreview && (
-        <div className="flex w-full flex-col gap-4 rounded-xl border-3 border-border bg-cardBg p-4 text-left shadow-brutal">
-          <p className="text-xs font-bold uppercase tracking-widest text-subtext">
-            Debug: last capture (temporary — remove once OCR is tuned)
-          </p>
-
-          <div className="flex flex-col gap-1">
-            <span className="text-xs font-bold uppercase text-subtext">Captured screenshot</span>
-            <img src={debugPreview.raw} alt="Captured screenshot" className="max-h-64 rounded-lg border-3 border-border" />
-          </div>
-
-          {debugPreview.text !== null && (
-            <>
-              <div className="flex flex-col gap-1">
-                <span className="text-xs font-bold uppercase text-subtext">Raw OCR output</span>
-                <pre className="max-h-32 overflow-auto whitespace-pre-wrap rounded-lg border-3 border-border bg-bg p-3 text-sm text-text">
-                  {debugPreview.text || '(empty)'}
-                </pre>
-              </div>
-
-              <div className="flex gap-4">
-                <button
-                  onClick={sendToReader}
-                  className="rounded-xl border-3 border-border bg-primary px-6 py-3 text-lg font-bold text-text shadow-brutal transition-all active:translate-x-1 active:translate-y-1 active:shadow-brutal-sm"
-                >
-                  Use This Text
-                </button>
-                <button
-                  onClick={() => setDebugPreview(null)}
-                  className="rounded-xl border-3 border-border bg-cardBg px-6 py-3 text-lg font-bold text-text shadow-brutal transition-all active:translate-x-1 active:translate-y-1 active:shadow-brutal-sm"
-                >
-                  Retry
-                </button>
-              </div>
-            </>
-          )}
-        </div>
-      )}
+      {status === 'picking' && <WindowPicker windows={windows} onSelect={captureWindow} onCancel={cancelPicker} />}
     </div>
   );
 }
