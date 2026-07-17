@@ -15,6 +15,10 @@ time — for both the screen and the physical dots.
 You don't need the hardware to try it. With no ESP32 connected, everything
 still runs end to end — you just don't get the physical dots.
 
+<img width="1024" height="768" alt="bloomknights-8" src="https://github.com/user-attachments/assets/3d9bdf03-94a5-404e-a977-ece8fae6a56a" />
+
+📹: https://www.youtube.com/watch?v=eGkaFCZrKGw
+
 ```
 Brailliant/
 ├── firmware/   ESP32 Arduino sketch — drives the 6 solenoids over serial
@@ -114,6 +118,10 @@ dot 1  ●  ●  dot 4
 dot 2  ●  ●  dot 5
 dot 3  ●  ●  dot 6
 ```
+
+**Circuit Diagram**
+<img width="1500" height="1096" alt="bloomknights-9" src="https://github.com/user-attachments/assets/fc13fb2d-9ebf-4896-ba80-1cf92e2417d2" />
+
 
 **Setup:**
 1. Open `firmware/esp32_braille.ino` in the Arduino IDE (or PlatformIO) with
